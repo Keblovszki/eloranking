@@ -8,6 +8,10 @@ const GAMES_COLLECTION = "Games";
 const SETTINGS_COLLECTION = "Settings";
 const HANNIBAL_ID = "253543574342205440";
 const K = 32;
+// Workeren kan ikke sove eller vente på en timer, så en rematch udløber ikke af
+// sig selv. I stedet gemmer vi et udløbstidspunkt og tjekker det næste gang
+// nogen rører ved afstemningen.
+const REMATCH_TIMEOUT_MINUTES = 5;
 
 export default {
     async fetch(request, env) {
@@ -52,7 +56,7 @@ export default {
                     case "force-cancel":
                         if (id !== HANNIBAL_ID) return respond("Only admins can use this command!");
                         await db.collection(GAMES_COLLECTION).updateMany(
-                            { status: { $in: ["pending", "started", "result"] }, channelId: channel_id },
+                            { status: { $in: ["pending", "started", "result", "proposed"] }, channelId: channel_id },
                             { $set: { status: "cancelled" } }
                         );
                         return respond("You have now reset the full set of games!");
@@ -353,6 +357,92 @@ export default {
                             return respond(`${global_name} has joined the game! (${count}/4)\n\n`);
                         }
 
+                    case "rematch":
+                        // Foreslår den seneste færdigspillede kamp i kanalen igen, med samme hold.
+                        // Selve afstemningen ligger i status "proposed", som IKKE tæller med i de
+                        // aktive kampe — ellers ville en enkelt spiller der ignorerer pinget kunne
+                        // låse alle fire ude af botten indtil den udløb.
+                        const rmPlayer = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
+                        if (!rmPlayer) return respond("You have not joined the ranking yet.");
+
+                        // Ryd op i udløbne afstemninger før vi tjekker om der allerede er en åben.
+                        await db.collection(GAMES_COLLECTION).updateMany(
+                            { type: "rematch", status: "proposed", channelId: channel_id, expiresAt: { $lte: new Date() } },
+                            { $set: { status: "expired" } }
+                        );
+
+                        const rmOpen = await db.collection(GAMES_COLLECTION).findOne({ type: "rematch", status: "proposed", channelId: channel_id });
+                        if (rmOpen) return respond("There is already a rematch waiting for answers in this channel.");
+
+                        const rmLast = await db.collection(GAMES_COLLECTION).findOne(
+                            { channelId: channel_id, status: "ended", type: { $in: ["single", "double"] } },
+                            { sort: { endedAt: -1, _id: -1 } }
+                        );
+                        if (!rmLast) return respond("There is no finished match in this channel to rematch yet.");
+
+                        const rmIds = [rmLast.playerId1, rmLast.playerId2, rmLast.playerId3, rmLast.playerId4].filter(pid => pid);
+                        if (!rmIds.includes(id)) return respond("Only the players from the last match can start a rematch.");
+
+                        const rmBusy = await db.collection(GAMES_COLLECTION).findOne({
+                            status: { $in: ["pending", "started", "result"] }, channelId: channel_id,
+                            $or: [
+                                { playerId1: { $in: rmIds } }, { playerId2: { $in: rmIds } },
+                                { playerId3: { $in: rmIds } }, { playerId4: { $in: rmIds } }
+                            ]
+                        });
+                        if (rmBusy) return respond("One or more players from that match are already in another game.");
+
+                        // Den der starter afstemningen har åbenlyst sagt ja allerede.
+                        const rmInsert = await db.collection(GAMES_COLLECTION).insertOne({
+                            playerName1: rmLast.playerName1, playerId1: rmLast.playerId1,
+                            playerName2: rmLast.playerName2, playerId2: rmLast.playerId2,
+                            playerName3: rmLast.playerName3, playerId3: rmLast.playerId3,
+                            playerName4: rmLast.playerName4, playerId4: rmLast.playerId4,
+                            teamElo1: null, teamElo2: null, team1Score: null, team2Score: null,
+                            status: "proposed", type: "rematch", rematchType: rmLast.type,
+                            proposedByName: global_name, acceptedBy: [id],
+                            expiresAt: new Date(Date.now() + REMATCH_TIMEOUT_MINUTES * 60000),
+                            channelId: channel_id,
+                        });
+
+                        const rmProposal = await db.collection(GAMES_COLLECTION).findOne({ _id: rmInsert.insertedId });
+                        return respond(buildRematchStatusText(rmProposal));
+
+                    case "accept-rematch":
+                    case "reject-rematch":
+                        const raProposal = await db.collection(GAMES_COLLECTION).findOne({
+                            type: "rematch", status: "proposed", channelId: channel_id,
+                            $or: [{ playerId1: id }, { playerId2: id }, { playerId3: id }, { playerId4: id }]
+                        });
+                        if (!raProposal) return respond("There is no rematch waiting for your answer.");
+
+                        if (raProposal.expiresAt <= new Date()) {
+                            await db.collection(GAMES_COLLECTION).updateOne({ _id: raProposal._id, status: "proposed" }, { $set: { status: "expired" } });
+                            return respond(`⌛ That rematch timed out after ${REMATCH_TIMEOUT_MINUTES} minutes. Type **/rematch** to propose it again.`);
+                        }
+
+                        if (name === "reject-rematch") {
+                            const raRejected = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
+                                { _id: raProposal._id, status: "proposed" },
+                                { $set: { status: "declined", declinedBy: id } }
+                            );
+                            if (!raRejected) return respond("That rematch is already closed.");
+                            return respond(`❌ ${global_name} declined the rematch. Type **/rematch** if you want to propose it again.`);
+                        }
+
+                        // $addToSet gør det harmløst at skrive /accept-rematch flere gange.
+                        const raAccepted = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
+                            { _id: raProposal._id, status: "proposed" },
+                            { $addToSet: { acceptedBy: id } },
+                            { returnDocument: 'after' }
+                        );
+                        if (!raAccepted) return respond("That rematch is already closed.");
+
+                        const raMissing = getRematchParticipants(raAccepted).filter(p => !raAccepted.acceptedBy.includes(p.playerId));
+                        if (raMissing.length > 0) return respond(buildRematchStatusText(raAccepted));
+
+                        return respond(await finishRematch(db, raAccepted, channel_id));
+
                     case "cancel":
                         const cGame = await db.collection(GAMES_COLLECTION).findOne({
                             status: { $in: ["pending", "started", "result"] }, channelId: channel_id,
@@ -466,7 +556,9 @@ export default {
                             }
                         }
 
-                        await db.collection(GAMES_COLLECTION).updateOne({ _id: aGame._id }, { $set: { status: "ended" } });
+                        // endedAt gør at /rematch kan finde den SENEST afsluttede kamp — uden den
+                        // kunne vi kun sortere på _id, altså den senest oprettede.
+                        await db.collection(GAMES_COLLECTION).updateOne({ _id: aGame._id }, { $set: { status: "ended", endedAt: new Date() } });
                         return respond(accMessage);
 
                     case "matches-overview":
@@ -535,7 +627,8 @@ export default {
                             `To start a random double type: **/play**. Game starts when 4 players join.\n\n` +
                             "**GAMES**\n" +
                             `Report result: **/result**.\n` +
-                            `Accept result: **/accept**.\n\n` +
+                            `Accept result: **/accept**.\n` +
+                            `Play the last match again: **/rematch**, then everyone types **/accept-rematch** within ${REMATCH_TIMEOUT_MINUTES} minutes.\n\n` +
                             "**RANKING**\n" +
                             `See rankings: **/single-ranking** or **/double-ranking**.`
                         );
@@ -558,6 +651,87 @@ export default {
         return new Response('Unknown interaction', { status: 400 });
     }
 };
+
+// --- Rematch ---
+
+function getRematchParticipants(game) {
+    return [
+        { playerId: game.playerId1, name: game.playerName1 },
+        { playerId: game.playerId2, name: game.playerName2 },
+        { playerId: game.playerId3, name: game.playerName3 },
+        { playerId: game.playerId4, name: game.playerName4 },
+    ].filter(p => p.playerId);
+}
+
+function getRematchTeamText(game, elo1 = null, elo2 = null) {
+    const tag1 = elo1 === null ? "" : ` (elo: ${elo1})`;
+    const tag2 = elo2 === null ? "" : ` (elo: ${elo2})`;
+    if (game.rematchType === "single") {
+        return `<@${game.playerId1}>${tag1} \nvs \n<@${game.playerId2}>${tag2}`;
+    }
+    return `Team 1: <@${game.playerId1}>, <@${game.playerId2}>${tag1} \nTeam 2: <@${game.playerId3}>, <@${game.playerId4}>${tag2}`;
+}
+
+// Tegner afstemningen. Botten kan ikke redigere sit gamle opslag uden et bot-token,
+// så hvert svar bliver et nyt opslag med den opdaterede optælling.
+function buildRematchStatusText(game) {
+    const participants = getRematchParticipants(game);
+    const voteLines = participants.map(p => `${game.acceptedBy.includes(p.playerId) ? "✅" : "⏳"} <@${p.playerId}>`);
+
+    return `🔁 **${game.proposedByName} wants a rematch!**\n\n` +
+        `${getRematchTeamText(game)}\n\n` +
+        `Everyone has to type **/accept-rematch** before the game starts (${game.acceptedBy.length}/${participants.length}):\n` +
+        `${voteLines.join('\n')}\n\n` +
+        `_Expires in ${REMATCH_TIMEOUT_MINUTES} minutes. Use **/reject-rematch** to say no._`;
+}
+
+// Kaldes når den sidste spiller har sagt ja. Afstemningen har med vilje ikke
+// spærret spillerne imens, så forudsætningerne skal tjekkes her — ikke dengang
+// afstemningen blev oprettet.
+async function finishRematch(db, game, channelId) {
+    const participants = getRematchParticipants(game);
+    const ids = participants.map(p => p.playerId);
+
+    const players = await db.collection(PLAYERS_COLLECTION).find({ playerId: { $in: ids }, channelId: channelId }).toArray();
+    const pMap = new Map(players.map(p => [p.playerId, p]));
+
+    if (ids.some(pid => !pMap.has(pid))) {
+        await db.collection(GAMES_COLLECTION).updateOne({ _id: game._id, status: "proposed" }, { $set: { status: "cancelled" } });
+        return "❌ One or more players are no longer on the ranking, so the rematch was cancelled.";
+    }
+
+    const busy = await db.collection(GAMES_COLLECTION).findOne({
+        status: { $in: ["pending", "started", "result"] }, channelId: channelId,
+        $or: [
+            { playerId1: { $in: ids } }, { playerId2: { $in: ids } },
+            { playerId3: { $in: ids } }, { playerId4: { $in: ids } }
+        ]
+    });
+    if (busy) {
+        await db.collection(GAMES_COLLECTION).updateOne({ _id: game._id, status: "proposed" }, { $set: { status: "cancelled" } });
+        return "❌ Someone joined another game while the rematch was waiting, so it was cancelled.";
+    }
+
+    // Elo hentes forfra: ratingen kan have flyttet sig siden den forrige kamp.
+    const isSingleRematch = game.rematchType === "single";
+    const ratingOf = (pid) => isSingleRematch ? pMap.get(pid).singleRanking : pMap.get(pid).doubleRanking;
+    const elo1 = isSingleRematch ? ratingOf(game.playerId1) : (ratingOf(game.playerId1) + ratingOf(game.playerId2)) / 2;
+    const elo2 = isSingleRematch ? ratingOf(game.playerId2) : (ratingOf(game.playerId3) + ratingOf(game.playerId4)) / 2;
+
+    // type skifter til "single"/"double", så /result, /accept, /cancel og
+    // matches-overview behandler kampen som en helt almindelig kamp herfra.
+    const started = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
+        { _id: game._id, status: "proposed" },
+        { $set: { status: "started", type: game.rematchType, teamElo1: elo1, teamElo2: elo2 } }
+    );
+    if (!started) return "That rematch is already closed.";
+
+    const settings = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channelId });
+    const shown1 = settings?.isBlind ? "???" : elo1;
+    const shown2 = settings?.isBlind ? "???" : elo2;
+
+    return `🔁 **Everyone accepted — the rematch is on!**\n\n${getRematchTeamText(game, shown1, shown2)}\n\nHave a nice game!`;
+}
 
 // --- Hjælpefunktioner ---
 function getUniqueRandomNumbers() {
