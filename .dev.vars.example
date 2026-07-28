@@ -1,0 +1,6 @@
+# Kopiér denne fil til ".dev.vars" og udfyld med dine egne værdier.
+# ".dev.vars" er ignoreret af git og bliver ALDRIG committet.
+# Wrangler indlæser disse automatisk under lokal udvikling (wrangler dev).
+
+DISCORD_PUBLIC_KEY="din_discord_public_key"
+MONGODB_URI="din_mongodb_connection_string"

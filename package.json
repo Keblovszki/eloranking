@@ -1,0 +1,16 @@
+{
+  "name": "eloranking",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "discord-interactions": "^4.4.0",
+    "mongodb": "^7.1.1"
+  }
+}
