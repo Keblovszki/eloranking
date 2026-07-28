@@ -8,6 +8,10 @@ const GAMES_COLLECTION = "Games";
 const SETTINGS_COLLECTION = "Settings";
 const HANNIBAL_ID = "253543574342205440";
 const K = 32;
+// 4 spillere kan kun deles op i 3 forskellige holdkombinationer, så 2 rerolls
+// er nok til at have set dem alle. Uden et loft kan man rulle til man får den
+// makker man gerne vil have — og så er der ikke meget "random" tilbage.
+const MAX_REROLLS = 2;
 
 export default {
     async fetch(request, env) {
@@ -343,6 +347,10 @@ export default {
                                     playerName1: p1.name, playerId1: p1.playerId, playerName2: p2.name, playerId2: p2.playerId,
                                     playerName3: p3.name, playerId3: p3.playerId, playerName4: p4.name, playerId4: p4.playerId,
                                     type: "double", status: "started", teamElo1: tElo1, teamElo2: tElo2,
+                                    // Typen skiftes til "double" så resten af botten (accept, matches-overview)
+                                    // behandler kampen som en helt normal double. isRandom husker hvor den kom fra,
+                                    // så kun /play-kampe kan rerolles — ikke dem hvor man selv har valgt makker.
+                                    isRandom: true, rerollCount: 0,
                                 }
                             });
 
@@ -352,6 +360,47 @@ export default {
                             const count = [prGame.playerId1, prGame.playerId2, prGame.playerId3, prGame.playerId4].filter(x => x !== null).length;
                             return respond(`${global_name} has joined the game! (${count}/4)\n\n`);
                         }
+
+                    case "reroll":
+                        // Blander de 4 spillere i en igangværende random double om til nye hold.
+                        const rrGame = await db.collection(GAMES_COLLECTION).findOne({
+                            status: "started", type: "double", isRandom: true, channelId: channel_id,
+                            $or: [{ playerId1: id }, { playerId2: id }, { playerId3: id }, { playerId4: id }]
+                        });
+                        if (!rrGame) return respond("You have no teams to reroll. **/reroll** only works on a started game created with **/play**, and only before a result is reported.");
+
+                        if (rrGame.rerollCount >= MAX_REROLLS) return respond(`The teams have already been rerolled ${MAX_REROLLS} times. Time to play!`);
+
+                        const rrIds = [rrGame.playerId1, rrGame.playerId2, rrGame.playerId3, rrGame.playerId4];
+                        const rrPlayers = await db.collection(PLAYERS_COLLECTION).find({
+                            playerId: { $in: rrIds }, channelId: channel_id
+                        }).toArray();
+
+                        // Hold rækkefølgen fra kampen, så vi ved hvem der er makkere lige nu.
+                        const rrMap = new Map(rrPlayers.map(p => [p.playerId, p]));
+                        const rrCurrent = rrIds.map(pid => rrMap.get(pid));
+                        if (rrCurrent.some(p => !p)) return respond("One of the players is no longer on the ranking. Use **/cancel** and start a new game.");
+
+                        const [rrP1, rrP2, rrP3, rrP4] = getRerolledTeams(rrCurrent);
+                        const rrElo1 = (rrP1.doubleRanking + rrP2.doubleRanking) / 2;
+                        const rrElo2 = (rrP3.doubleRanking + rrP4.doubleRanking) / 2;
+
+                        // rerollCount i filteret gør skrivningen atomisk: rammer to spillere
+                        // /reroll samtidig, er der kun én der vinder.
+                        const rrUpdated = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
+                            { _id: rrGame._id, status: "started", rerollCount: rrGame.rerollCount },
+                            { $set: {
+                                    playerName1: rrP1.name, playerId1: rrP1.playerId, playerName2: rrP2.name, playerId2: rrP2.playerId,
+                                    playerName3: rrP3.name, playerId3: rrP3.playerId, playerName4: rrP4.name, playerId4: rrP4.playerId,
+                                    teamElo1: rrElo1, teamElo2: rrElo2,
+                                },
+                                $inc: { rerollCount: 1 }
+                            }, { returnDocument: 'after' }
+                        );
+                        if (!rrUpdated) return respond("The game changed while the teams were being rerolled. Try **/reroll** again.");
+
+                        const rrBlind = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
+                        return respond(`🎲 ${global_name} has rerolled the teams! (${rrUpdated.rerollCount}/${MAX_REROLLS})\n\nThe new teams are: \nTeam 1: <@${rrP1.playerId}>, <@${rrP2.playerId}> (elo: ${rrBlind?.isBlind ? "???" : rrElo1}) \nTeam 2: <@${rrP3.playerId}>, <@${rrP4.playerId}> (elo: ${rrBlind?.isBlind ? "???" : rrElo2}) \n\nHave a nice game!`);
 
                     case "cancel":
                         const cGame = await db.collection(GAMES_COLLECTION).findOne({
@@ -532,7 +581,8 @@ export default {
                             `To start a double type: **/play-double** and add your partner.\n` +
                             `To accept type: **/double-accepted** and add your partner and the creator.\n\n` +
                             "**DOUBLE RANDOM**\n" +
-                            `To start a random double type: **/play**. Game starts when 4 players join.\n\n` +
+                            `To start a random double type: **/play**. Game starts when 4 players join.\n` +
+                            `Don't like the teams? Type: **/reroll** (max ${MAX_REROLLS} times per game).\n\n` +
                             "**GAMES**\n" +
                             `Report result: **/result**.\n` +
                             `Accept result: **/accept**.\n\n` +
@@ -567,6 +617,17 @@ function getUniqueRandomNumbers() {
         [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
     }
     return numbers;
+}
+
+// Tager de 4 spillere i deres nuværende rækkefølge ([hold1, hold1, hold2, hold2])
+// og returnerer en ny opstilling. Med 4 spillere findes der kun 3 mulige
+// holdkombinationer, så en almindelig shuffle ville lande på de samme hold hver
+// 3. gang. Derfor beholder vi p1 og giver ham en af de to spillere han IKKE
+// spiller med nu — så er holdene garanteret anderledes.
+function getRerolledTeams([p1, p2, p3, p4]) {
+    return Math.random() < 0.5
+        ? [p1, p3, p2, p4]
+        : [p1, p4, p2, p3];
 }
 
 function calculateEloRatingDifference(playerRating, opponentRating, score, K = 32) {
