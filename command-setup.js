@@ -13,6 +13,7 @@ if (!APP_ID || !BOT_TOKEN) {
 const ALL_COMMANDS = [
     { name: "join-ranking", description: "Join the ranking system", type: 1 },
     { name: "play", description: "Join a random double game", type: 1 },
+    { name: "reroll", description: "Shuffle the teams in your random double game", type: 1 },
     { name: "blind-season-toggle", description: "Admin: Toggle blind season", type: 1 },
     { name: "force-cancel", description: "Admin: Reset all games", type: 1 },
     { name: "reset-season", description: "Admin: Start a new season", type: 1 },
