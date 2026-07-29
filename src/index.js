@@ -8,6 +8,10 @@ const GAMES_COLLECTION = "Games";
 const SETTINGS_COLLECTION = "Settings";
 const HANNIBAL_ID = "253543574342205440";
 const K = 32;
+// En tilskuer får 20% af det holdet han satsede på vandt eller tabte — dog
+// altid mindst 1 point, så et væddemål aldrig er gratis.
+const BET_SHARE = 0.2;
+const BET_MINIMUM = 1;
 // 4 spillere kan kun deles op i 3 forskellige holdkombinationer, så 2 rerolls
 // er nok til at have set dem alle. Uden et loft kan man rulle til man får den
 // makker man gerne vil have — og så er der ikke meget "random" tilbage.
@@ -361,6 +365,59 @@ export default {
                             return respond(`${global_name} has joined the game! (${count}/4)\n\n`);
                         }
 
+                    case "bet":
+                        // Væddemål gemmes på selve kampen, så de dør sammen med den hvis den
+                        // bliver annulleret — og så er de allerede hentet når /accept afregner.
+                        const btPlayer = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
+                        if (!btPlayer) return respond("You have not joined the ranking yet.");
+
+                        const btTeam = options.find(o => o.name === "team").value;
+                        const btMatchOption = options.find(o => o.name === "match");
+
+                        // Der kan sagtens være flere kampe i gang i kanalen, så vi lader
+                        // brugeren pege på én hvis der er tvivl.
+                        const btStarted = await db.collection(GAMES_COLLECTION).find(
+                            { status: "started", channelId: channel_id }
+                        ).sort({ _id: 1 }).toArray();
+                        if (btStarted.length === 0) return respond("There is no started match to bet on right now.");
+
+                        let btGame = null;
+                        if (btMatchOption) {
+                            btGame = btStarted[btMatchOption.value - 1];
+                            if (!btGame) return respond(`There is no match number ${btMatchOption.value}. There are ${btStarted.length} started matches.`);
+                        } else if (btStarted.length === 1) {
+                            btGame = btStarted[0];
+                        } else {
+                            const btList = btStarted.map((g, i) => `${i + 1}. ${getTeamLabel(g, 1)} - ${getTeamLabel(g, 2)}`);
+                            return respond(`There are several started matches. Add the match number, for example **/bet team:1 match:2**\n\n${btList.join('\n')}`);
+                        }
+
+                        if ([btGame.playerId1, btGame.playerId2, btGame.playerId3, btGame.playerId4].includes(id)) {
+                            return respond("You can't bet on a match you are playing in yourself!");
+                        }
+                        if (btGame.bettingClosed) return respond("The result for that match has already been reported, so betting is closed.");
+
+                        // Filteret gentager status-tjekket, så et væddemål ikke kan snige sig ind
+                        // i samme øjeblik som resultatet bliver indberettet.
+                        const btGuard = { _id: btGame._id, status: "started", bettingClosed: { $ne: true } };
+
+                        const btPlaced = await db.collection(GAMES_COLLECTION).updateOne(
+                            { ...btGuard, "bets.playerId": { $ne: id } },
+                            { $push: { bets: { playerId: id, playerName: global_name, team: btTeam, placedAt: new Date() } } }
+                        );
+                        if (btPlaced.matchedCount === 1) {
+                            return respond(`💰 ${global_name} bet on **Team ${btTeam}** (${getTeamLabel(btGame, btTeam)})!`);
+                        }
+
+                        const btChanged = await db.collection(GAMES_COLLECTION).updateOne(
+                            { ...btGuard, "bets.playerId": id },
+                            { $set: { "bets.$.team": btTeam, "bets.$.placedAt": new Date() } }
+                        );
+                        if (btChanged.matchedCount === 1) {
+                            return respond(`💰 ${global_name} moved the bet to **Team ${btTeam}** (${getTeamLabel(btGame, btTeam)})!`);
+                        }
+
+                        return respond("Betting just closed for that match.");
                     case "reroll":
                         // Blander de 4 spillere i en igangværende random double om til nye hold.
                         const rrGame = await db.collection(GAMES_COLLECTION).findOne({
@@ -438,7 +495,9 @@ export default {
 
                         const rGame = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
                             { status: "started", channelId: channel_id, $or: [{ playerId1: id }, { playerId2: id }, { playerId3: id }, { playerId4: id }] },
-                            { $set: { team1Score: fTeam1, team2Score: fTeam2, status: "result" } },
+                            // bettingClosed bliver aldrig sat tilbage af /reject. Ellers kunne man
+                            // indberette et resultat, se det, afvise det og så vædde bagefter.
+                            { $set: { team1Score: fTeam1, team2Score: fTeam2, status: "result", bettingClosed: true } },
                             { returnDocument: 'after' }
                         );
                         if (!rGame) return respond("You have not participated in any started game.");
@@ -515,6 +574,9 @@ export default {
                             }
                         }
 
+                        const betSummary = await settleBets(db, aGame, t1Diff, t2Diff, channel_id, isAccBlind);
+                        if (betSummary) accMessage += `\n${betSummary}`;
+
                         await db.collection(GAMES_COLLECTION).updateOne({ _id: aGame._id }, { $set: { status: "ended" } });
                         return respond(accMessage);
 
@@ -586,6 +648,9 @@ export default {
                             "**GAMES**\n" +
                             `Report result: **/result**.\n` +
                             `Accept result: **/accept**.\n\n` +
+                            "**BETTING**\n" +
+                            `Not playing? Bet on a team with **/bet**. You win or lose ${BET_SHARE * 100}% of what that team gets (at least ${BET_MINIMUM}).\n` +
+                            `Betting closes as soon as the result is reported.\n\n` +
                             "**RANKING**\n" +
                             `See rankings: **/single-ranking** or **/double-ranking**.`
                         );
@@ -608,6 +673,67 @@ export default {
         return new Response('Unknown interaction', { status: 400 });
     }
 };
+
+// --- Væddemål ---
+
+function getTeamLabel(game, team) {
+    if (game.type === "single") return team === 1 ? game.playerName1 : game.playerName2;
+    return team === 1 ? `${game.playerName1} & ${game.playerName2}` : `${game.playerName3} & ${game.playerName4}`;
+}
+
+// teamScore afgør retningen, ikke fortegnet på teamEloDiff. En stor favorit der
+// vinder kan nemlig ende på 0 point efter afrunding, og så skal tilskueren
+// stadig have sit minimum ud af det.
+function calculateBetPayout(teamScore, teamEloDiff) {
+    if (teamScore === 1) return Math.max(BET_MINIMUM, Math.round(teamEloDiff * BET_SHARE));
+    if (teamScore === 0) return -Math.max(BET_MINIMUM, Math.round(Math.abs(teamEloDiff) * BET_SHARE));
+    return 0; // uafgjort: væddemålet er dødt
+}
+
+async function settleBets(db, game, team1Diff, team2Diff, channelId, isBlind) {
+    const bets = game.bets || [];
+    if (bets.length === 0) return "";
+
+    // To spillere kan nå at skrive /accept samtidig. Den første der sætter
+    // betsSettled vinder, så ingen får udbetalt to gange.
+    const claim = await db.collection(GAMES_COLLECTION).updateOne(
+        { _id: game._id, betsSettled: { $ne: true } },
+        { $set: { betsSettled: true } }
+    );
+    if (claim.matchedCount === 0) return "";
+
+    // Et væddemål flytter kun ratingen — ikke wins, loses eller streaks.
+    const ratingField = game.type === "single" ? "singleRanking" : "doubleRanking";
+    const lines = [];
+    let settled = 0;
+
+    for (const bet of bets) {
+        const teamScore = bet.team === 1 ? game.team1Score : game.team2Score;
+        const teamEloDiff = bet.team === 1 ? team1Diff : team2Diff;
+        const payout = calculateBetPayout(teamScore, teamEloDiff);
+
+        if (payout === 0) {
+            lines.push(`${bet.playerName} bet on Team ${bet.team}: draw, nothing won or lost.`);
+            continue;
+        }
+
+        // $inc frem for læs-og-skriv, så to samtidige opdateringer ikke kan
+        // overskrive hinandens resultat.
+        const updated = await db.collection(PLAYERS_COLLECTION).findOneAndUpdate(
+            { playerId: bet.playerId, channelId: channelId },
+            { $inc: { [ratingField]: payout } },
+            { returnDocument: 'after' }
+        );
+        if (!updated) continue; // spilleren er væk, fx efter /reset-season
+
+        settled++;
+        lines.push(`${bet.playerName} bet on Team ${bet.team}: ${payout > 0 ? "+" : ""}${payout} elo -> ${updated[ratingField]}`);
+    }
+
+    if (lines.length === 0) return "";
+    if (isBlind) return `**BETS**\n🙈 ${settled} bet(s) were settled in the shadows.`;
+    return `**BETS**\n${lines.join('\n')}`;
+}
 
 // --- Hjælpefunktioner ---
 function getUniqueRandomNumbers() {

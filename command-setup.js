@@ -54,6 +54,18 @@ const ALL_COMMANDS = [
         ]
     },
     {
+        name: "bet",
+        description: "Bet on a team in a match you are not playing in",
+        type: 1,
+        options: [
+            {
+                name: "team", description: "Which team do you think wins?", type: 4, required: true,
+                choices: [{ name: "Team 1", value: 1 }, { name: "Team 2", value: 2 }]
+            },
+            { name: "match", description: "Match number — only needed if several matches are running", type: 4, required: false }
+        ]
+    },
+    {
         name: "season-ranking",
         description: "See a previous season ranking",
         type: 1,
