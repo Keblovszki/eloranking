@@ -520,9 +520,12 @@ export default {
                         const accBlindSet = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
                         const isAccBlind = accBlindSet?.isBlind ?? false;
 
-                        const aGame = await db.collection(GAMES_COLLECTION).findOne({
-                            status: "result", channelId: channel_id, $or: [{ playerId1: id }, { playerId2: id }, { playerId3: id }, { playerId4: id }]
-                        });
+                        // Atomically claim the game so concurrent /accept calls can't commit the result twice.
+                        const aGame = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
+                            { status: "result", channelId: channel_id, $or: [{ playerId1: id }, { playerId2: id }, { playerId3: id }, { playerId4: id }] },
+                            { $set: { status: "ended" } },
+                            { returnDocument: "before" }
+                        );
                         if (!aGame) return respond("You have to be part of the game to *accept* it!");
 
                         const t1Diff = calculateEloRatingDifference(aGame.teamElo1, aGame.teamElo2, aGame.team1Score, K);
