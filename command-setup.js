@@ -26,6 +26,7 @@ const ALL_COMMANDS = [
     { name: "play-single", description: "Challenge someone to a single match", type: 1 },
     { name: "matches-overview", description: "See the status of current matches", type: 1 },
     { name: "stats", description: "See statistics for the current season", type: 1 },
+    { name: "seasons", description: "See all completed seasons and when they ran", type: 1 },
     {
         name: "edit-username",
         description: "Edit your displayed username",

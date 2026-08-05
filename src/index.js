@@ -211,6 +211,39 @@ export default {
                         });
                         return respond([seasonTitle, ...sPrintRows].join('\n'));
 
+                    case "seasons":
+                        // En sæson er "færdig" når den er arkiveret, så Seasons-kollektionen
+                        // ER listen over gennemførte sæsoner. Hver arkiveret spiller har sin
+                        // egen archivedAt, men de sættes i samme transaktion — så $max er
+                        // sæsonens sluttidspunkt.
+                        const seaGroups = await db.collection(PLAYERS_HISTORY_COLLECTION).aggregate([
+                            { $match: { channelId: channel_id } },
+                            { $group: { _id: "$seasonId", endedAt: { $max: "$archivedAt" } } },
+                            { $sort: { _id: 1 } }
+                        ]).toArray();
+
+                        if (seaGroups.length === 0) return respond("No seasons have been completed yet.");
+
+                        const seaRows = seaGroups.map((s, i) => {
+                            // Sæsonen startede da den forrige blev arkiveret. Den første
+                            // sæson — og sæsoner arkiveret før archivedAt fandtes — har
+                            // ingen startdato vi kan kende.
+                            const from = i > 0 ? seaGroups[i - 1].endedAt : null;
+                            const to = s.endedAt;
+
+                            let period = "";
+                            if (from && to) period = ` — ${formatSeasonDate(from)} → ${formatSeasonDate(to)}`;
+                            else if (to) period = ` — ended ${formatSeasonDate(to)}`;
+
+                            return `**Season ${s._id}**${period}`;
+                        });
+
+                        return respond(
+                            "📅 **Completed Seasons** 📅\n--------------------------------------\n" +
+                            seaRows.join('\n') +
+                            "\n\nSee a ranking with **/season-ranking**."
+                        );
+
                     case "stats":
                         const statSettings = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
                         if (statSettings?.isBlind) return respond("🙈 **BLIND SEASON ER AKTIV!** 🙈\nStatistikker er skjult indtil sæsonen er slut!");
@@ -689,7 +722,8 @@ export default {
                             `Not playing? Bet on a team with **/bet**. You win or lose ${BET_SHARE * 100}% of what that team gets (at least ${BET_MINIMUM}).\n` +
                             `Betting closes as soon as the result is reported.\n\n` +
                             "**RANKING**\n" +
-                            `See rankings: **/single-ranking** or **/double-ranking**.`
+                            `See rankings: **/single-ranking** or **/double-ranking**.\n` +
+                            `See completed seasons: **/seasons**. See an old ranking: **/season-ranking**.`
                         );
 
                     default:
@@ -773,6 +807,15 @@ async function settleBets(db, game, team1Diff, team2Diff, channelId, isBlind) {
 }
 
 // --- Hjælpefunktioner ---
+
+// Discord-timestamps (<t:unix:d>) vises i hver brugers egen tidszone og
+// datoformat, så vi slipper for at vælge et format for alle.
+function formatSeasonDate(date) {
+    const ms = date instanceof Date ? date.getTime() : new Date(date).getTime();
+    if (Number.isNaN(ms)) return "unknown";
+    return `<t:${Math.floor(ms / 1000)}:d>`;
+}
+
 function getUniqueRandomNumbers() {
     const numbers = [0, 1, 2, 3];
     for (let i = numbers.length - 1; i > 0; i--) {
