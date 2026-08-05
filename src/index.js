@@ -59,17 +59,25 @@ export default {
                     data: { content: msg, flags: 64 }
                 });
 
-                // Offentlig followup-besked til kanalen. Den hænger IKKE sammen med
-                // slash-kommando-headeren, så den afslører ingen parametre. Kører
-                // efter svaret er sendt via waitUntil, så den ikke bremser svaret.
-                const announce = (msg) => ctx.waitUntil(fetch(
-                    `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}`,
-                    {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ content: msg })
-                    }
-                ));
+                // Offentlig besked i kanalen. Vi sender en HELT ALMINDELIG kanalbesked
+                // (ikke en interaction-followup), så den ikke vises som et svar på den
+                // skjulte ephemeral-besked. Den afslører hverken parametre eller hold.
+                // Kræver bot-tokenet som Cloudflare-secret (DISCORD_BOT_TOKEN) — hvis
+                // den mangler, springes beskeden bare over, så /bet stadig virker.
+                const announce = (msg) => {
+                    if (!env.DISCORD_BOT_TOKEN) return;
+                    ctx.waitUntil(fetch(
+                        `https://discord.com/api/v10/channels/${channel_id}/messages`,
+                        {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`
+                            },
+                            body: JSON.stringify({ content: msg })
+                        }
+                    ));
+                };
 
                 // 3. Routing af kommandoer
                 switch (name) {
