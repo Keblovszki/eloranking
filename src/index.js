@@ -18,7 +18,7 @@ const BET_MINIMUM = 1;
 const MAX_REROLLS = 2;
 
 export default {
-    async fetch(request, env) {
+    async fetch(request, env, ctx) {
         // 1. Verificer Discord signatur
         const signature = request.headers.get('x-signature-ed25519');
         const timestamp = request.headers.get('x-signature-timestamp');
@@ -51,6 +51,25 @@ export default {
                     type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
                     data: { content: msg }
                 });
+
+                // Ephemeral svar: kun personen der kørte kommandoen ser det — og
+                // dermed ser ingen andre slash-kommandoens parametre (fx team:1).
+                const respondEphemeral = (msg) => Response.json({
+                    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    data: { content: msg, flags: 64 }
+                });
+
+                // Offentlig followup-besked til kanalen. Den hænger IKKE sammen med
+                // slash-kommando-headeren, så den afslører ingen parametre. Kører
+                // efter svaret er sendt via waitUntil, så den ikke bremser svaret.
+                const announce = (msg) => ctx.waitUntil(fetch(
+                    `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}`,
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ content: msg })
+                    }
+                ));
 
                 // 3. Routing af kommandoer
                 switch (name) {
@@ -368,8 +387,12 @@ export default {
                     case "bet":
                         // Væddemål gemmes på selve kampen, så de dør sammen med den hvis den
                         // bliver annulleret — og så er de allerede hentet når /accept afregner.
+                        // Alle svar i /bet er ephemeral: ellers ville Discord vise
+                        // slash-kommandoens parametre (fx team:1) offentligt i headeren
+                        // over svaret — også på fejlbeskeder. Så ingen kan se hvilket
+                        // hold nogen har bettet på, før /accept afslører det.
                         const btPlayer = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
-                        if (!btPlayer) return respond("You have not joined the ranking yet.");
+                        if (!btPlayer) return respondEphemeral("You have not joined the ranking yet.");
 
                         const btTeam = options.find(o => o.name === "team").value;
                         const btMatchOption = options.find(o => o.name === "match");
@@ -379,23 +402,23 @@ export default {
                         const btStarted = await db.collection(GAMES_COLLECTION).find(
                             { status: "started", channelId: channel_id }
                         ).sort({ _id: 1 }).toArray();
-                        if (btStarted.length === 0) return respond("There is no started match to bet on right now.");
+                        if (btStarted.length === 0) return respondEphemeral("There is no started match to bet on right now.");
 
                         let btGame = null;
                         if (btMatchOption) {
                             btGame = btStarted[btMatchOption.value - 1];
-                            if (!btGame) return respond(`There is no match number ${btMatchOption.value}. There are ${btStarted.length} started matches.`);
+                            if (!btGame) return respondEphemeral(`There is no match number ${btMatchOption.value}. There are ${btStarted.length} started matches.`);
                         } else if (btStarted.length === 1) {
                             btGame = btStarted[0];
                         } else {
                             const btList = btStarted.map((g, i) => `${i + 1}. ${getTeamLabel(g, 1)} - ${getTeamLabel(g, 2)}`);
-                            return respond(`There are several started matches. Add the match number, for example **/bet team:1 match:2**\n\n${btList.join('\n')}`);
+                            return respondEphemeral(`There are several started matches. Add the match number, for example **/bet team:1 match:2**\n\n${btList.join('\n')}`);
                         }
 
                         if ([btGame.playerId1, btGame.playerId2, btGame.playerId3, btGame.playerId4].includes(id)) {
-                            return respond("You can't bet on a match you are playing in yourself!");
+                            return respondEphemeral("You can't bet on a match you are playing in yourself!");
                         }
-                        if (btGame.bettingClosed) return respond("The result for that match has already been reported, so betting is closed.");
+                        if (btGame.bettingClosed) return respondEphemeral("The result for that match has already been reported, so betting is closed.");
 
                         // Filteret gentager status-tjekket, så et væddemål ikke kan snige sig ind
                         // i samme øjeblik som resultatet bliver indberettet.
@@ -406,7 +429,9 @@ export default {
                             { $push: { bets: { playerId: id, playerName: global_name, team: btTeam, placedAt: new Date() } } }
                         );
                         if (btPlaced.matchedCount === 1) {
-                            return respond(`💰 ${global_name} bet on **Team ${btTeam}** (${getTeamLabel(btGame, btTeam)})!`);
+                            // Offentligt: at der er bettet — men ikke på hvad. Privat: holdet.
+                            announce(`💰 ${global_name} placed a bet! 🤫`);
+                            return respondEphemeral(`💰 You bet on **Team ${btTeam}** (${getTeamLabel(btGame, btTeam)})! Only you can see this.`);
                         }
 
                         const btChanged = await db.collection(GAMES_COLLECTION).updateOne(
@@ -414,10 +439,11 @@ export default {
                             { $set: { "bets.$.team": btTeam, "bets.$.placedAt": new Date() } }
                         );
                         if (btChanged.matchedCount === 1) {
-                            return respond(`💰 ${global_name} moved the bet to **Team ${btTeam}** (${getTeamLabel(btGame, btTeam)})!`);
+                            announce(`💰 ${global_name} moved their bet! 🤫`);
+                            return respondEphemeral(`💰 You moved your bet to **Team ${btTeam}** (${getTeamLabel(btGame, btTeam)})! Only you can see this.`);
                         }
 
-                        return respond("Betting just closed for that match.");
+                        return respondEphemeral("Betting just closed for that match.");
                     case "reroll":
                         // Blander de 4 spillere i en igangværende random double om til nye hold.
                         const rrGame = await db.collection(GAMES_COLLECTION).findOne({
