@@ -2,3 +2,12 @@ name = "elo-bot"
 main = "src/index.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
+
+[vars]
+RNGDLE_CHANNEL_ID = "PUT_CHANNEL_ID_HERE"
+
+# Cron is always UTC. Both entries fire daily; the handler only acts on the
+# one that lands at 16:00 in Copenhagen, since Copenhagen alternates between
+# UTC+1 (CET) and UTC+2 (CEST) across the year.
+[triggers]
+crons = ["0 14 * * *", "0 15 * * *"]

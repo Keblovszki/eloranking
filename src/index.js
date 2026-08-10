@@ -18,6 +18,10 @@ const BET_MINIMUM = 1;
 const MAX_REROLLS = 2;
 
 export default {
+    async scheduled(event, env, ctx) {
+        ctx.waitUntil(announceRngdleWinner(env));
+    },
+
     async fetch(request, env, ctx) {
         // 1. Verificer Discord signatur
         const signature = request.headers.get('x-signature-ed25519');
@@ -770,6 +774,81 @@ async function settleBets(db, game, team1Diff, team2Diff, channelId, isBlind) {
     if (lines.length === 0) return "";
     if (isBlind) return `**BETS**\n🙈 ${settled} bet(s) were settled in the shadows.`;
     return `**BETS**\n${lines.join('\n')}`;
+}
+
+// --- RNGdle ---
+
+const DISCORD_EPOCH_MS = 1420070400000n;
+
+function getCopenhagenParts(date) {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Europe/Copenhagen', hourCycle: 'h23',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+    const map = {};
+    for (const p of fmt.formatToParts(date)) map[p.type] = p.value;
+    return { hour: Number(map.hour), minute: Number(map.minute), second: Number(map.second) };
+}
+
+// Subtracting the Copenhagen wall-clock time-of-day from "now" gives the instant
+// of Copenhagen midnight today, since that instant is always earlier in real time.
+function copenhagenMidnightMs(now, parts) {
+    const elapsedMs = ((parts.hour * 60 + parts.minute) * 60 + parts.second) * 1000;
+    return now.getTime() - elapsedMs;
+}
+
+function snowflakeFromMs(ms) {
+    return ((BigInt(ms) - DISCORD_EPOCH_MS) << 22n).toString();
+}
+
+function parseRngdleResult(content) {
+    if (!/RNGdle/i.test(content)) return null;
+    const match = content.match(/([\d,]+)\s*EP/);
+    if (!match) return null;
+    return { ep: Number(match[1].replace(/,/g, '')) };
+}
+
+async function announceRngdleWinner(env) {
+    if (!env.DISCORD_BOT_TOKEN || !env.RNGDLE_CHANNEL_ID) return;
+
+    const now = new Date();
+    const parts = getCopenhagenParts(now);
+    if (parts.hour !== 16) return;
+
+    const after = snowflakeFromMs(copenhagenMidnightMs(now, parts));
+    const res = await fetch(
+        `https://discord.com/api/v10/channels/${env.RNGDLE_CHANNEL_ID}/messages?after=${after}&limit=100`,
+        { headers: { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` } }
+    );
+    if (!res.ok) return;
+    const messages = await res.json();
+
+    // Discord returns newest-first; walk oldest-to-newest so each user's first
+    // result of the day is the one that's kept.
+    messages.reverse();
+
+    const firstResultByUser = new Map();
+    for (const msg of messages) {
+        if (firstResultByUser.has(msg.author.id)) continue;
+        const parsed = parseRngdleResult(msg.content);
+        if (!parsed) continue;
+        firstResultByUser.set(msg.author.id, { ...parsed, authorId: msg.author.id });
+    }
+    if (firstResultByUser.size === 0) return;
+
+    const results = [...firstResultByUser.values()];
+    const best = results.reduce((a, b) => (b.ep > a.ep ? b : a));
+    const participantMentions = results.map(r => `<@${r.authorId}>`).join(' ');
+
+    await fetch(`https://discord.com/api/v10/channels/${env.RNGDLE_CHANNEL_ID}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` },
+        body: JSON.stringify({
+            content: `🎲 **RNGdle Result of the Day** 🎲\n\n` +
+                `🏆 Best roll: <@${best.authorId}> with **${best.ep.toLocaleString()} EP**!\n\n` +
+                `Participants today: ${participantMentions}`
+        })
+    });
 }
 
 // --- Hjælpefunktioner ---
