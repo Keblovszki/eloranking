@@ -82,10 +82,19 @@ $env:APP_ID="din_app_id"; $env:BOT_TOKEN="din_bot_token"; node command-setup.js
 # Sæt produktions-secrets i Cloudflare (gemmes krypteret, ikke i koden)
 npx wrangler secret put DISCORD_PUBLIC_KEY
 npx wrangler secret put MONGODB_URI
+npx wrangler secret put DISCORD_BOT_TOKEN
 
 # Deploy
 npx wrangler deploy
 ```
+
+### RNGdle-kanal
+
+Sæt `RNGDLE_CHANNEL_ID` i `wrangler.toml` til ID'et på den kanal, hvor spillere
+poster deres RNGdle-resultater. Hver dag kl. 16:00 (København) læser botten
+dagens resultater i den kanal og annoncerer dagens bedste (flest EP), med tag
+af alle der har postet et resultat den dag. Kræver `DISCORD_BOT_TOKEN` som
+secret (se ovenfor) med **Read Message History**-tilladelse i kanalen.
 
 Peg til sidst din Discord-apps **Interactions Endpoint URL** hen på din deployede Worker-URL.
 
