@@ -6,6 +6,7 @@ const PLAYERS_COLLECTION = "Players";
 const PLAYERS_HISTORY_COLLECTION = "Seasons";
 const GAMES_COLLECTION = "Games";
 const SETTINGS_COLLECTION = "Settings";
+const RNGDLE_COLLECTION = "Rngdle";
 const HANNIBAL_ID = "253543574342205440";
 const K = 32;
 // En tilskuer får 20% af det holdet han satsede på vandt eller tabte — dog
@@ -783,11 +784,17 @@ const DISCORD_EPOCH_MS = 1420070400000n;
 function getCopenhagenParts(date) {
     const fmt = new Intl.DateTimeFormat('en-US', {
         timeZone: 'Europe/Copenhagen', hourCycle: 'h23',
+        year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit', second: '2-digit'
     });
     const map = {};
     for (const p of fmt.formatToParts(date)) map[p.type] = p.value;
-    return { hour: Number(map.hour), minute: Number(map.minute), second: Number(map.second) };
+    return {
+        hour: Number(map.hour), minute: Number(map.minute), second: Number(map.second),
+        // Dagens dato i København — bruges som markør for hvilken dag der senest
+        // er lagt point til, så samme dag ikke kan tælles med to gange.
+        dateKey: `${map.year}-${map.month}-${map.day}`
+    };
 }
 
 // Subtracting the Copenhagen wall-clock time-of-day from "now" gives the instant
@@ -829,10 +836,17 @@ async function announceRngdleWinner(env) {
 
     const firstResultByUser = new Map();
     for (const msg of messages) {
+        // Botten poster selv dagens resultat i kanalen, og den besked matcher
+        // parseren — så den må aldrig kunne ende på stillingen.
+        if (msg.author.bot) continue;
         if (firstResultByUser.has(msg.author.id)) continue;
         const parsed = parseRngdleResult(msg.content);
         if (!parsed) continue;
-        firstResultByUser.set(msg.author.id, { ...parsed, authorId: msg.author.id });
+        firstResultByUser.set(msg.author.id, {
+            ...parsed,
+            authorId: msg.author.id,
+            name: msg.member?.nick || msg.author.global_name || msg.author.username
+        });
     }
     if (firstResultByUser.size === 0) return;
 
@@ -840,15 +854,90 @@ async function announceRngdleWinner(env) {
     const best = results.reduce((a, b) => (b.ep > a.ep ? b : a));
     const participantMentions = results.map(r => `<@${r.authorId}>`).join(' ');
 
+    let leaderboard;
+    try {
+        leaderboard = await updateRngdleLeaderboard(env, results, best, parts.dateKey);
+        // null betyder at dagen allerede er talt med — så er beskeden også
+        // sendt, og vi annoncerer ikke igen.
+        if (leaderboard === null) return;
+    } catch (err) {
+        // Stillingen kunne ikke opdateres. Dagens vinder er stadig værd at
+        // annoncere, så vi poster uden leaderboard frem for slet ikke.
+        console.log(`RNGdle leaderboard update failed: ${err.message}`);
+    }
+
+    const sections = [
+        `🎲 **RNGdle Result of the Day** 🎲`,
+        `🏆 Best roll: <@${best.authorId}> with **${best.ep.toLocaleString()} EP**!`,
+        `Participants today: ${participantMentions}`
+    ];
+    if (leaderboard?.length) sections.push(formatRngdleLeaderboard(leaderboard));
+
     await fetch(`https://discord.com/api/v10/channels/${env.RNGDLE_CHANNEL_ID}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` },
         body: JSON.stringify({
-            content: `🎲 **RNGdle Result of the Day** 🎲\n\n` +
-                `🏆 Best roll: <@${best.authorId}> with **${best.ep.toLocaleString()} EP**!\n\n` +
-                `Participants today: ${participantMentions}`
+            content: sections.join('\n\n'),
+            // Stillingen viser brugernes egne visningsnavne. "users" lader
+            // deltager-mentions pinge, men et navn der indeholder @everyone
+            // eller en rolle kan ikke udløse et ping.
+            allowed_mentions: { parse: ["users"] }
         })
     });
+}
+
+// Hele stillingen ligger i ét dokument pr. kanal: den daglige beregning har kun
+// én skribent (cron'en), så der er ingen samtidighed at tage højde for, og hele
+// stillingen kan opdateres i én skrivning. lastCountedDate gør det harmløst hvis
+// samme dag skulle blive kørt to gange.
+//
+// Returnerer den opdaterede stilling, eller null hvis dagen allerede er talt med.
+async function updateRngdleLeaderboard(env, results, best, dateKey) {
+    const client = new MongoClient(env.MONGODB_URI);
+    try {
+        await client.connect();
+        const col = client.db(DB_ELO_NAME).collection(RNGDLE_COLLECTION);
+        const doc = await col.findOne({ channelId: env.RNGDLE_CHANNEL_ID });
+        if (doc?.lastCountedDate === dateKey) return null;
+
+        const byId = new Map((doc?.totals ?? []).map(t => [t.userId, { ...t }]));
+        for (const r of results) {
+            const entry = byId.get(r.authorId) ?? { userId: r.authorId, totalEp: 0, days: 0, wins: 0 };
+            entry.name = r.name; // navne kan skifte — brug altid det nyeste
+            entry.totalEp += r.ep;
+            entry.days += 1;
+            if (r.authorId === best.authorId) entry.wins += 1;
+            byId.set(r.authorId, entry);
+        }
+
+        const totals = [...byId.values()].sort((a, b) => b.totalEp - a.totalEp);
+        await col.updateOne(
+            { channelId: env.RNGDLE_CHANNEL_ID },
+            { $set: { lastCountedDate: dateKey, totals } },
+            { upsert: true }
+        );
+        return totals;
+    } finally {
+        await client.close();
+    }
+}
+
+// En Discord-besked kan højst være 2000 tegn, så stillingen skæres af frem for
+// at risikere at hele annonceringen bliver afvist.
+const RNGDLE_LEADERBOARD_LIMIT = 15;
+
+function formatRngdleLeaderboard(totals) {
+    const shown = totals.slice(0, RNGDLE_LEADERBOARD_LIMIT);
+    const lines = shown.map((t, i) => {
+        const days = `${t.days} ${t.days === 1 ? 'day' : 'days'}`;
+        const wins = `${t.wins} ${t.wins === 1 ? 'win' : 'wins'}`;
+        return `${i + 1}. ${t.name} — **${t.totalEp.toLocaleString()} EP** (${days}, ${wins})`;
+    });
+    if (totals.length > shown.length) lines.push(`…and ${totals.length - shown.length} more`);
+
+    return "🏅 **All-time RNGdle leaderboard** 🏅\n" +
+        "--------------------------------------\n" +
+        lines.join('\n');
 }
 
 // --- Hjælpefunktioner ---

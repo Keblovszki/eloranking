@@ -96,6 +96,11 @@ dagens resultater i den kanal og annoncerer dagens bedste (flest EP), med tag
 af alle der har postet et resultat den dag. Kræver `DISCORD_BOT_TOKEN` som
 secret (se ovenfor) med **Read Message History**-tilladelse i kanalen.
 
+Kun hver spillers **første** resultat på dagen tælles. Pointene lægges sammen
+over tid i `Rngdle`-kollektionen (ét dokument pr. kanal), og den samlede
+stilling vises i samme besked som dagens vinder. Der er ingen kommando til den —
+den følger automatisk med hver daglige annoncering.
+
 Peg til sidst din Discord-apps **Interactions Endpoint URL** hen på din deployede Worker-URL.
 
 ## Bidrag til projektet
