@@ -4,7 +4,7 @@ compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-RNGDLE_CHANNEL_ID = "PUT_CHANNEL_ID_HERE"
+RNGDLE_CHANNEL_ID = "1536627129691938846"
 
 # Cron is always UTC. Both entries fire daily; the handler only acts on the
 # one that lands at 16:00 in Copenhagen, since Copenhagen alternates between
