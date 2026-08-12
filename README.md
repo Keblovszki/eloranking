@@ -101,10 +101,11 @@ over tid i `Rngdle`-kollektionen (ét dokument pr. kanal), og den samlede
 stilling vises i samme besked som dagens vinder. Der er ingen kommando til den —
 den følger automatisk med hver daglige annoncering.
 
-Ved midnat (København) poster botten desuden en skillelinje med dagens dato i
-kanalen, så det er til at se hvor dagen skifter. Alt der postes under markøren
-tæller med i den følgende annoncering. Markøren er en bot-besked og kan derfor
-aldrig selv ende på stillingen.
+RNGdle nulstiller kl. 02:00 (København), og det er dér dagen tælles fra. Botten
+poster en skillelinje med dagens dato på nulstillingstidspunktet, så det er til
+at se hvor dagen skifter — alt der postes under markøren tæller med i den
+følgende annoncering kl. 16:00. Markøren er en bot-besked og kan derfor aldrig
+selv ende på stillingen.
 
 Peg til sidst din Discord-apps **Interactions Endpoint URL** hen på din deployede Worker-URL.
 

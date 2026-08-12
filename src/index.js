@@ -800,10 +800,16 @@ function getCopenhagenParts(date) {
     };
 }
 
+// RNGdle nulstiller kl. 02:00 dansk tid — ikke ved midnat. Et resultat postet
+// kl. 01:30 hører altså til gårsdagens omgang.
+const RNGDLE_RESET_HOUR = 2;
+
 // Subtracting the Copenhagen wall-clock time-of-day from "now" gives the instant
-// of Copenhagen midnight today, since that instant is always earlier in real time.
-function copenhagenMidnightMs(now, parts) {
-    const elapsedMs = ((parts.hour * 60 + parts.minute) * 60 + parts.second) * 1000;
+// of Copenhagen midnight today, since that instant is always earlier in real
+// time; the reset hour on top of that is when today's RNGdle day began. Kun
+// kaldt efter nulstillingen, så resultatet ligger altid i fortiden.
+function rngdleDayStartMs(now, parts) {
+    const elapsedMs = (((parts.hour - RNGDLE_RESET_HOUR) * 60 + parts.minute) * 60 + parts.second) * 1000;
     return now.getTime() - elapsedMs;
 }
 
@@ -827,7 +833,7 @@ async function announceRngdleWinner(env) {
     const parts = getCopenhagenParts(now);
     if (parts.hour !== 16) return;
 
-    const after = snowflakeFromMs(copenhagenMidnightMs(now, parts));
+    const after = snowflakeFromMs(rngdleDayStartMs(now, parts));
     const res = await fetch(
         `https://discord.com/api/v10/channels/${env.RNGDLE_CHANNEL_ID}/messages?after=${after}&limit=100`,
         { headers: { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` } }
@@ -891,14 +897,17 @@ async function announceRngdleWinner(env) {
     });
 }
 
-// Ved midnat i København starter en ny RNGdle-dag. Botten poster en skillelinje
-// i kanalen, så man kan se med det blotte øje hvor dagen skifter — alt under
+// Når RNGdle nulstiller, starter en ny dag. Botten poster en skillelinje i
+// kanalen, så man kan se med det blotte øje hvor dagen skifter — alt under
 // markøren tæller med i dagens resultat.
 async function postRngdleDayMarker(env) {
     if (!env.DISCORD_BOT_TOKEN || !env.RNGDLE_CHANNEL_ID) return;
 
+    // Den nat vi skifter til sommertid, springer København fra 01:59 til 03:00,
+    // og så findes kl. 02 slet ikke. Derfor accepteres begge de timer cron'en
+    // kan ramme — lastMarkerDate sørger for at der stadig kun kommer én linje.
     const parts = getCopenhagenParts(new Date());
-    if (parts.hour !== 0) return;
+    if (parts.hour < RNGDLE_RESET_HOUR || parts.hour >= RNGDLE_RESET_HOUR + 2) return;
 
     try {
         // Cloudflare kan gentage en cron-fyring. Uden markering ville kanalen

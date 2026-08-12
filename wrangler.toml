@@ -10,6 +10,6 @@ RNGDLE_CHANNEL_ID = "1536627129691938846"
 # across the year, so each Copenhagen hour we care about needs two entries — the
 # handlers only act on the one that lands on the right local hour.
 #   14:00 / 15:00 UTC -> 16:00 Copenhagen, the daily result announcement
-#   22:00 / 23:00 UTC -> 00:00 Copenhagen, the new-day marker
+#   00:00 / 01:00 UTC -> 02:00 Copenhagen, the new-day marker (RNGdle's reset)
 [triggers]
-crons = ["0 14 * * *", "0 15 * * *", "0 22 * * *", "0 23 * * *"]
+crons = ["0 14 * * *", "0 15 * * *", "0 0 * * *", "0 1 * * *"]
