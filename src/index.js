@@ -45,6 +45,20 @@ export default {
             const id = user.id;
             const channel_id = interaction.channel_id;
 
+            // RNGdle-kanalen er kun til dagens resultat. Alt i botten scopes på
+            // channelId, så kommandoer brugt her ville bygge en helt separat
+            // ranking op ved siden af den rigtige. Afvises før DB-forbindelsen,
+            // så et blokeret kald ikke koster en connection.
+            if (env.RNGDLE_CHANNEL_ID && channel_id === env.RNGDLE_CHANNEL_ID) {
+                return Response.json({
+                    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    data: {
+                        content: "Commands are disabled here — this channel is only for the daily RNGdle results.",
+                        flags: 64
+                    }
+                });
+            }
+
             // 2. Forbind til MongoDB
             const client = new MongoClient(env.MONGODB_URI);
             try {
