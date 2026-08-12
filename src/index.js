@@ -20,7 +20,10 @@ const MAX_REROLLS = 2;
 
 export default {
     async scheduled(event, env, ctx) {
+        // Begge kører ved hver cron-fyring; hver funktion tjekker selv om
+        // klokken i København passer til netop den opgave.
         ctx.waitUntil(announceRngdleWinner(env));
+        ctx.waitUntil(postRngdleDayMarker(env));
     },
 
     async fetch(request, env, ctx) {
@@ -886,6 +889,70 @@ async function announceRngdleWinner(env) {
             allowed_mentions: { parse: ["users"] }
         })
     });
+}
+
+// Ved midnat i København starter en ny RNGdle-dag. Botten poster en skillelinje
+// i kanalen, så man kan se med det blotte øje hvor dagen skifter — alt under
+// markøren tæller med i dagens resultat.
+async function postRngdleDayMarker(env) {
+    if (!env.DISCORD_BOT_TOKEN || !env.RNGDLE_CHANNEL_ID) return;
+
+    const parts = getCopenhagenParts(new Date());
+    if (parts.hour !== 0) return;
+
+    try {
+        // Cloudflare kan gentage en cron-fyring. Uden markering ville kanalen
+        // få to skillelinjer for samme dag.
+        if (!(await claimRngdleMarkerDate(env, parts.dateKey))) return;
+    } catch (err) {
+        // Uden database er en dobbelt skillelinje det værste der kan ske —
+        // langt mindre slemt end slet ingen markør.
+        console.log(`RNGdle marker claim failed: ${err.message}`);
+    }
+
+    await fetch(`https://discord.com/api/v10/channels/${env.RNGDLE_CHANNEL_ID}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` },
+        body: JSON.stringify({
+            content: formatRngdleDayMarker(parts.dateKey),
+            allowed_mentions: { parse: [] }
+        })
+    });
+}
+
+// Returnerer true hvis dagen ikke var markeret i forvejen — altså om vi må
+// poste. Ligesom stillingen har markøren kun én skribent (cron'en), så det er
+// trygt at læse og skrive i to trin. Feltet ligger i samme dokument pr. kanal
+// som stillingen, så de to deler ikke andet end plads.
+async function claimRngdleMarkerDate(env, dateKey) {
+    const client = new MongoClient(env.MONGODB_URI);
+    try {
+        await client.connect();
+        const col = client.db(DB_ELO_NAME).collection(RNGDLE_COLLECTION);
+        const doc = await col.findOne({ channelId: env.RNGDLE_CHANNEL_ID });
+        if (doc?.lastMarkerDate === dateKey) return false;
+
+        await col.updateOne(
+            { channelId: env.RNGDLE_CHANNEL_ID },
+            { $set: { lastMarkerDate: dateKey } },
+            { upsert: true }
+        );
+        return true;
+    } finally {
+        await client.close();
+    }
+}
+
+function formatRngdleDayMarker(dateKey) {
+    const label = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+    }).format(new Date(`${dateKey}T00:00:00Z`));
+
+    return [
+        "───────────────────────────────",
+        `🎲 **New RNGdle day** — ${label}`,
+        "───────────────────────────────"
+    ].join('\n');
 }
 
 // Hele stillingen ligger i ét dokument pr. kanal: den daglige beregning har kun

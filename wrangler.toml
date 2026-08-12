@@ -6,8 +6,10 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 RNGDLE_CHANNEL_ID = "1536627129691938846"
 
-# Cron is always UTC. Both entries fire daily; the handler only acts on the
-# one that lands at 16:00 in Copenhagen, since Copenhagen alternates between
-# UTC+1 (CET) and UTC+2 (CEST) across the year.
+# Cron is always UTC. Copenhagen alternates between UTC+1 (CET) and UTC+2 (CEST)
+# across the year, so each Copenhagen hour we care about needs two entries — the
+# handlers only act on the one that lands on the right local hour.
+#   14:00 / 15:00 UTC -> 16:00 Copenhagen, the daily result announcement
+#   22:00 / 23:00 UTC -> 00:00 Copenhagen, the new-day marker
 [triggers]
-crons = ["0 14 * * *", "0 15 * * *"]
+crons = ["0 14 * * *", "0 15 * * *", "0 22 * * *", "0 23 * * *"]
