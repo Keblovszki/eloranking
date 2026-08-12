@@ -810,9 +810,11 @@ function snowflakeFromMs(ms) {
 
 function parseRngdleResult(content) {
     if (!/RNGdle/i.test(content)) return null;
-    const match = content.match(/([\d,]+)\s*EP/);
+    // RNGdle formats EP with locale-dependent thousands separators
+    // ("7,057" vs "142.018"), so strip both comma and period.
+    const match = content.match(/([\d.,]+)\s*EP/);
     if (!match) return null;
-    return { ep: Number(match[1].replace(/,/g, '')) };
+    return { ep: Number(match[1].replace(/[.,]/g, '')) };
 }
 
 async function announceRngdleWinner(env) {
