@@ -977,27 +977,38 @@ function formatRoll(scored) {
 
 // Den samlede stilling: summér EP pr. spiller på tværs af alle dage. Rullene er
 // kilden til sandheden, så stillingen kan altid regnes forfra og kan ikke komme
-// ud af trit med dem.
+// ud af trit med dem — også dagssejrene, som ellers skulle vedligeholdes separat.
 async function getRngdleStandings(db, channelId, bannedIds) {
     const match = { channelId };
     if (bannedIds?.size) match.playerId = { $nin: [...bannedIds] };
 
     return db.collection(RNGDLE_ROLLS_COLLECTION).aggregate([
         { $match: match },
+        // Først samles dagene, så hver dag kender sit eget bedste rul. Deler to
+        // spillere dagens bedste, får de begge en sejr.
+        {
+            $group: {
+                _id: "$dateKey",
+                maxEp: { $max: "$ep" },
+                rolls: { $push: { playerId: "$playerId", ep: "$ep", name: "$name", rolledAt: "$rolledAt" } }
+            }
+        },
+        { $unwind: "$rolls" },
         // Navne kan skifte, og vi vil vise det nyeste. $last tager sidste dokument
         // i den rækkefølge de kommer ind i grupperingen, så sorteringen på rolledAt
         // er det, der gør "sidste" til "nyeste" — uden den er navnet vilkårligt.
-        { $sort: { rolledAt: 1 } },
+        { $sort: { "rolls.rolledAt": 1 } },
         {
             $group: {
-                _id: "$playerId",
-                totalEp: { $sum: "$ep" },
+                _id: "$rolls.playerId",
+                totalEp: { $sum: "$rolls.ep" },
                 days: { $sum: 1 },
-                best: { $max: "$ep" },
-                name: { $last: "$name" }
+                best: { $max: "$rolls.ep" },
+                wins: { $sum: { $cond: [{ $eq: ["$rolls.ep", "$maxEp"] }, 1, 0] } },
+                name: { $last: "$rolls.name" }
             }
         },
-        { $sort: { totalEp: -1 } }
+        { $sort: { totalEp: -1, wins: -1 } }
     ]).toArray();
 }
 
@@ -1007,11 +1018,12 @@ function formatRngdleLeaderboard(standings) {
     const shown = standings.slice(0, RNGDLE_LEADERBOARD_LIMIT);
     const lines = shown.map((t, i) => {
         const days = `${t.days} ${t.days === 1 ? 'day' : 'days'}`;
+        const wins = `${t.wins} ${t.wins === 1 ? 'win' : 'wins'}`;
         let rank = `${i + 1}. `;
         if (i === 0) rank = '🥇';
         else if (i === 1) rank = '🥈';
         else if (i === 2) rank = '🥉';
-        return `${rank}${t.name} — **${t.totalEp.toLocaleString()} EP** (${days}, best ${t.best.toLocaleString()})`;
+        return `${rank}${t.name} — **${t.totalEp.toLocaleString()} EP** (${days}, ${wins}, best ${t.best.toLocaleString()})`;
     });
     if (standings.length > shown.length) lines.push(`…and ${standings.length - shown.length} more`);
 
