@@ -45,6 +45,22 @@ export default {
             return Response.json({ type: InteractionResponseType.PONG });
         }
 
+        // Klik på "Show badges"-knappen. Det rullede tal sidder i custom_id, og
+        // computeRoll er en ren funktion, så hele badge-listen kan genberegnes
+        // uden en databaseopslag.
+        if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
+            const customId = interaction.data.custom_id;
+            if (customId.startsWith("rngdle_badges:")) {
+                const number = Number(customId.slice("rngdle_badges:".length));
+                const breakdown = formatBadgeBreakdown(computeRoll(number));
+                return Response.json({
+                    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    data: { content: breakdown, flags: 64 }
+                });
+            }
+            return new Response('Unknown component', { status: 400 });
+        }
+
         if (interaction.type === InteractionType.APPLICATION_COMMAND) {
             const { name, options } = interaction.data;
             const { user, nick } = interaction.member;
@@ -96,16 +112,16 @@ export default {
                 const db = client.db(DB_ELO_NAME);
 
                 // Hjælpefunktion til at sende svar tilbage
-                const respond = (msg) => Response.json({
+                const respond = (msg, components) => Response.json({
                     type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-                    data: { content: msg }
+                    data: { content: msg, ...(components ? { components } : {}) }
                 });
 
                 // Ephemeral svar: kun personen der kørte kommandoen ser det — og
                 // dermed ser ingen andre slash-kommandoens parametre (fx team:1).
-                const respondEphemeral = (msg) => Response.json({
+                const respondEphemeral = (msg, components) => Response.json({
                     type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-                    data: { content: msg, flags: 64 }
+                    data: { content: msg, flags: 64, ...(components ? { components } : {}) }
                 });
 
                 // Offentlig besked i kanalen. Vi sender en HELT ALMINDELIG kanalbesked
@@ -184,18 +200,23 @@ export default {
 
                         if (alreadyRolled) {
                             return respondEphemeral(
-                                `You already rolled today.\n\n${formatRoll(scored)}\n\nCome back tomorrow.`
+                                `You already rolled today.\n\n${formatRoll(scored)}\n\nCome back tomorrow.`,
+                                rngdleBadgesRow(scored.number)
                             );
                         }
                         // Rullet er offentligt — det er hele sjovet, og alle skal
-                        // kunne se hvad de andre fik.
-                        return respond(`<@${id}> rolled:\n\n${formatRoll(scored)}`);
+                        // kunne se hvad de andre fik. Badge-listen holdes ude af den
+                        // offentlige besked og kan i stedet hentes ephemeral med knappen.
+                        return respond(
+                            `<@${id}> rolled:\n\n${formatRoll(scored)}`,
+                            rngdleBadgesRow(scored.number)
+                        );
                     }
 
                     case "roll-ranking": {
                         const standings = await getRngdleStandings(db, channel_id, getBannedRngdleIds(env));
                         const board = formatRngdleLeaderboard(standings);
-                        return respond(board ?? "Nobody has rolled yet. Use **/roll** to start.");
+                        return respondEphemeral(board ?? "Nobody has rolled yet. Use **/roll** to start.");
                     }
 
                     // --- RANKING OG BRUGER COMMANDS ---
@@ -960,19 +981,31 @@ async function rollForToday(db, channelId, playerId, name, dateKey) {
 const RNGDLE_BADGE_LIMIT = 12;
 const RNGDLE_LEADERBOARD_LIMIT = 15;
 
-// Kun badges der rent faktisk giver point vises — de fortrængte ville bare støje
-// med "0 EP"-linjer, og der kan sagtens være 20 af dem på ét rul.
 function formatRoll(scored) {
+    return [
+        `🎲 **${scored.number}**`,
+        `${tierEmoji(scored.tier)} **${scored.tier.toUpperCase()}** — **${scored.totalEP.toLocaleString()} EP**`
+    ].join('\n\n');
+}
+
+// Kun badges der rent faktisk giver point vises — de fortrængte ville bare støje
+// med "0 EP"-linjer, og der kan sagtens være 20 af dem på ét rul. Bruges kun i det
+// ephemerale svar på "Show badges", så den offentlige besked ikke spammes.
+function formatBadgeBreakdown(scored) {
     const scoring = scored.badges.filter(b => b.ep > 0);
     const shown = scoring.slice(0, RNGDLE_BADGE_LIMIT);
     const lines = shown.map(b => `${b.emoji} ${b.label} — ${b.ep.toLocaleString()} EP`);
     if (scoring.length > shown.length) lines.push(`…and ${scoring.length - shown.length} more`);
+    return lines.join('\n');
+}
 
-    return [
-        `🎲 **${scored.number.toLocaleString()}**`,
-        `${tierEmoji(scored.tier)} **${scored.tier.toUpperCase()}** — **${scored.totalEP.toLocaleString()} EP**`,
-        lines.join('\n')
-    ].join('\n\n');
+// Knaprække til at hente badge-listen ephemeral. Tallet i custom_id er nok til at
+// genberegne alt — computeRoll er en ren funktion, så der er ingen state at slå op.
+function rngdleBadgesRow(number) {
+    return [{
+        type: 1,
+        components: [{ type: 2, style: 2, label: "Show badges", custom_id: `rngdle_badges:${number}` }]
+    }];
 }
 
 // Den samlede stilling: summér EP pr. spiller på tværs af alle dage. Rullene er
@@ -1057,7 +1090,7 @@ async function announceRngdleWinner(env) {
 
         sections = [
             `🎲 **RNGdle Result of the Day** 🎲`,
-            `🏆 Best roll: <@${best.playerId}> with **${best.number.toLocaleString()}** ` +
+            `🏆 Best roll: <@${best.playerId}> with **${best.number}** ` +
             `— ${tierEmoji(best.tier)} **${best.ep.toLocaleString()} EP**!`,
             `Participants today: ${participants}`
         ];
