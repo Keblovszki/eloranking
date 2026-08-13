@@ -21,6 +21,8 @@ const ALL_COMMANDS = [
     { name: "accept", description: "Accept the reported result", type: 1 },
     { name: "reject", description: "Reject the reported result", type: 1 },
     { name: "help", description: "Learn how the bot works", type: 1 },
+    { name: "roll", description: "RNGdle: roll your number of the day", type: 1 },
+    { name: "roll-ranking", description: "RNGdle: see the all-time leaderboard", type: 1 },
     { name: "single-ranking", description: "See the single ranking", type: 1 },
     { name: "double-ranking", description: "See the double ranking", type: 1 },
     { name: "play-single", description: "Challenge someone to a single match", type: 1 },

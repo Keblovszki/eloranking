@@ -1,12 +1,18 @@
 import { InteractionType, InteractionResponseType, verifyKey } from "discord-interactions";
 import { MongoClient } from "mongodb";
+import { computeRoll, tierEmoji, MAX_ROLL } from "./rngdle.js";
 
 const DB_ELO_NAME = "EloRanking";
 const PLAYERS_COLLECTION = "Players";
 const PLAYERS_HISTORY_COLLECTION = "Seasons";
 const GAMES_COLLECTION = "Games";
 const SETTINGS_COLLECTION = "Settings";
-const RNGDLE_COLLECTION = "Rngdle";
+// Ét dokument pr. rul. Den gamle "Rngdle"-kollektion stammer fra dengang pointene
+// blev skrabet ud af beskeder i kanalen; den bruges ikke længere, og stillingen
+// starter forfra her.
+const RNGDLE_ROLLS_COLLECTION = "RngdleRolls";
+// Kommandoer der hører til spillet frem for Elo-ranglisten.
+const RNGDLE_COMMANDS = new Set(["roll", "roll-ranking"]);
 const HANNIBAL_ID = "253543574342205440";
 const K = 32;
 // En tilskuer får 20% af det holdet han satsede på vandt eller tabte — dog
@@ -46,17 +52,40 @@ export default {
             const id = user.id;
             const channel_id = interaction.channel_id;
 
-            // RNGdle-kanalen er kun til dagens resultat. Alt i botten scopes på
-            // channelId, så kommandoer brugt her ville bygge en helt separat
-            // ranking op ved siden af den rigtige. Afvises før DB-forbindelsen,
-            // så et blokeret kald ikke koster en connection.
-            if (env.RNGDLE_CHANNEL_ID && channel_id === env.RNGDLE_CHANNEL_ID) {
+            // RNGdle-kanalen og Elo-kanalerne holdes adskilt. Elo-kommandoerne
+            // scopes på channelId, så brugt i RNGdle-kanalen ville de bygge en
+            // helt separat ranking op ved siden af den rigtige — og omvendt hører
+            // spillet kun hjemme ét sted, så der er én fælles stilling.
+            // Afvises før DB-forbindelsen, så et blokeret kald ikke koster en
+            // connection. Uden RNGDLE_CHANNEL_ID (fx lokalt) er alt tilladt overalt.
+            const isRngdleCommand = RNGDLE_COMMANDS.has(name);
+            if (env.RNGDLE_CHANNEL_ID) {
+                const inRngdleChannel = channel_id === env.RNGDLE_CHANNEL_ID;
+                if (inRngdleChannel && !isRngdleCommand) {
+                    return Response.json({
+                        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        data: {
+                            content: "Commands are disabled here — this channel is only for RNGdle. Use **/roll** or **/roll-ranking**.",
+                            flags: 64
+                        }
+                    });
+                }
+                if (!inRngdleChannel && isRngdleCommand) {
+                    return Response.json({
+                        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        data: {
+                            content: `RNGdle is played in <#${env.RNGDLE_CHANNEL_ID}> — roll over there.`,
+                            flags: 64
+                        }
+                    });
+                }
+            }
+
+            // Bandlyste kan hverken rulle eller trække stillingen frem.
+            if (isRngdleCommand && getBannedRngdleIds(env).has(id)) {
                 return Response.json({
                     type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-                    data: {
-                        content: "Commands are disabled here — this channel is only for the daily RNGdle results.",
-                        flags: 64
-                    }
+                    data: { content: "You are banned from RNGdle.", flags: 64 }
                 });
             }
 
@@ -144,6 +173,30 @@ export default {
                             { channelId: channel_id }, { $set: { isBlind: !isCurrentlyBlind } }, { upsert: true }
                         );
                         return respond(`Blind Season is now **${!isCurrentlyBlind ? "ACTIVATED 🙈" : "DEACTIVATED 🐵"}**!`);
+
+                    // --- RNGDLE ---
+
+                    case "roll": {
+                        const { dateKey } = getCopenhagenParts(new Date());
+                        const { scored, alreadyRolled } = await rollForToday(
+                            db, channel_id, id, global_name, dateKey
+                        );
+
+                        if (alreadyRolled) {
+                            return respondEphemeral(
+                                `You already rolled today.\n\n${formatRoll(scored)}\n\nCome back tomorrow.`
+                            );
+                        }
+                        // Rullet er offentligt — det er hele sjovet, og alle skal
+                        // kunne se hvad de andre fik.
+                        return respond(`<@${id}> rolled:\n\n${formatRoll(scored)}`);
+                    }
+
+                    case "roll-ranking": {
+                        const standings = await getRngdleStandings(db, channel_id, getBannedRngdleIds(env));
+                        const board = formatRngdleLeaderboard(standings);
+                        return respond(board ?? "Nobody has rolled yet. Use **/roll** to start.");
+                    }
 
                     // --- RANKING OG BRUGER COMMANDS ---
 
@@ -709,7 +762,11 @@ export default {
                             `Not playing? Bet on a team with **/bet**. You win or lose ${BET_SHARE * 100}% of what that team gets (at least ${BET_MINIMUM}).\n` +
                             `Betting closes as soon as the result is reported.\n\n` +
                             "**RANKING**\n" +
-                            `See rankings: **/single-ranking** or **/double-ranking**.`
+                            `See rankings: **/single-ranking** or **/double-ranking**.\n\n` +
+                            "**RNGDLE**\n" +
+                            (env.RNGDLE_CHANNEL_ID
+                                ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is. **/roll-ranking** shows the all-time EP standings.`
+                                : `One roll a day with **/roll** — a random number scored on how interesting it is. **/roll-ranking** shows the all-time EP standings.`)
                         );
 
                     default:
@@ -794,8 +851,6 @@ async function settleBets(db, game, team1Diff, team2Diff, channelId, isBlind) {
 
 // --- RNGdle ---
 
-const DISCORD_EPOCH_MS = 1420070400000n;
-
 function getCopenhagenParts(date) {
     const fmt = new Intl.DateTimeFormat('en-US', {
         timeZone: 'Europe/Copenhagen', hourCycle: 'h23',
@@ -806,21 +861,10 @@ function getCopenhagenParts(date) {
     for (const p of fmt.formatToParts(date)) map[p.type] = p.value;
     return {
         hour: Number(map.hour), minute: Number(map.minute), second: Number(map.second),
-        // Dagens dato i København — bruges som markør for hvilken dag der senest
-        // er lagt point til, så samme dag ikke kan tælles med to gange.
+        // Spildøgnet følger København, ikke UTC. dateKey er nøglen til "ét rul pr.
+        // spiller pr. dag" og til at finde dagens rul igen ved annonceringen.
         dateKey: `${map.year}-${map.month}-${map.day}`
     };
-}
-
-// Subtracting the Copenhagen wall-clock time-of-day from "now" gives the instant
-// of Copenhagen midnight today, since that instant is always earlier in real time.
-function copenhagenMidnightMs(now, parts) {
-    const elapsedMs = ((parts.hour * 60 + parts.minute) * 60 + parts.second) * 1000;
-    return now.getTime() - elapsedMs;
-}
-
-function snowflakeFromMs(ms) {
-    return ((BigInt(ms) - DISCORD_EPOCH_MS) << 22n).toString();
 }
 
 // Bandlyste spillere står som kommasepareret liste af Discord-bruger-ID'er i
@@ -860,76 +904,157 @@ async function enforceRngdleBans(env) {
     }
 }
 
-function parseRngdleResult(content) {
-    if (!/RNGdle/i.test(content)) return null;
-    // RNGdle formats EP with locale-dependent thousands separators
-    // ("7,057" vs "142.018"), so strip both comma and period.
-    const match = content.match(/([\d.,]+)\s*EP/);
-    if (!match) return null;
-    return { ep: Number(match[1].replace(/[.,]/g, '')) };
+// Ét rul pr. spiller pr. dag. Dokumentnøglen er (channelId, playerId, dateKey), og
+// et unikt indeks på den kombination er det, der faktisk håndhæver reglen — to
+// samtidige /roll kan ikke begge slippe igennem. Indekset sikres én gang pr.
+// isolate; kaldet er idempotent og koster kun noget ved kold start.
+let rollIndexEnsured = null;
+function ensureRollIndex(db) {
+    if (!rollIndexEnsured) {
+        rollIndexEnsured = db.collection(RNGDLE_ROLLS_COLLECTION)
+            .createIndex({ channelId: 1, playerId: 1, dateKey: 1 }, { unique: true })
+            // Slår det fejl, prøver næste kald igen frem for at cache fejlen.
+            .catch(err => { rollIndexEnsured = null; throw err; });
+    }
+    return rollIndexEnsured;
 }
 
+// Kryptografisk tilfældigt tal i 0..1.000.000 uden modulo-skævhed: vi trækker om,
+// hvis lodtrækningen lander i det sidste, ufuldstændige interval.
+function randomRoll() {
+    const span = MAX_ROLL + 1;
+    const limit = Math.floor(0xFFFFFFFF / span) * span;
+    const buf = new Uint32Array(1);
+    let v;
+    do { crypto.getRandomValues(buf); v = buf[0]; } while (v >= limit);
+    return v % span;
+}
+
+// Ruller dagens tal. Returnerer { roll, alreadyRolled } — har spilleren allerede
+// rullet i dag, får vi det gamle rul tilbage i stedet for et nyt.
+async function rollForToday(db, channelId, playerId, name, dateKey) {
+    await ensureRollIndex(db);
+    const col = db.collection(RNGDLE_ROLLS_COLLECTION);
+
+    const number = randomRoll();
+    const scored = computeRoll(number);
+    const doc = {
+        channelId, playerId, dateKey, name,
+        number, ep: scored.totalEP, tier: scored.tier,
+        rolledAt: new Date()
+    };
+
+    try {
+        await col.insertOne(doc);
+        return { roll: doc, scored, alreadyRolled: false };
+    } catch (err) {
+        // 11000 = unique index violation, dvs. spilleren har rullet i dag.
+        if (err.code !== 11000) throw err;
+        const existing = await col.findOne({ channelId, playerId, dateKey });
+        return { roll: existing, scored: computeRoll(existing.number), alreadyRolled: true };
+    }
+}
+
+// En Discord-besked kan højst være 2000 tegn, så både badge-listen og stillingen
+// skæres af frem for at risikere at hele beskeden bliver afvist.
+const RNGDLE_BADGE_LIMIT = 12;
+const RNGDLE_LEADERBOARD_LIMIT = 15;
+
+// Kun badges der rent faktisk giver point vises — de fortrængte ville bare støje
+// med "0 EP"-linjer, og der kan sagtens være 20 af dem på ét rul.
+function formatRoll(scored) {
+    const scoring = scored.badges.filter(b => b.ep > 0);
+    const shown = scoring.slice(0, RNGDLE_BADGE_LIMIT);
+    const lines = shown.map(b => `${b.emoji} ${b.label} — ${b.ep.toLocaleString()} EP`);
+    if (scoring.length > shown.length) lines.push(`…and ${scoring.length - shown.length} more`);
+
+    return [
+        `🎲 **${scored.number.toLocaleString()}**`,
+        `${tierEmoji(scored.tier)} **${scored.tier.toUpperCase()}** — **${scored.totalEP.toLocaleString()} EP**`,
+        lines.join('\n')
+    ].join('\n\n');
+}
+
+// Den samlede stilling: summér EP pr. spiller på tværs af alle dage. Rullene er
+// kilden til sandheden, så stillingen kan altid regnes forfra og kan ikke komme
+// ud af trit med dem.
+async function getRngdleStandings(db, channelId, bannedIds) {
+    const match = { channelId };
+    if (bannedIds?.size) match.playerId = { $nin: [...bannedIds] };
+
+    return db.collection(RNGDLE_ROLLS_COLLECTION).aggregate([
+        { $match: match },
+        // Navne kan skifte, og vi vil vise det nyeste. $last tager sidste dokument
+        // i den rækkefølge de kommer ind i grupperingen, så sorteringen på rolledAt
+        // er det, der gør "sidste" til "nyeste" — uden den er navnet vilkårligt.
+        { $sort: { rolledAt: 1 } },
+        {
+            $group: {
+                _id: "$playerId",
+                totalEp: { $sum: "$ep" },
+                days: { $sum: 1 },
+                best: { $max: "$ep" },
+                name: { $last: "$name" }
+            }
+        },
+        { $sort: { totalEp: -1 } }
+    ]).toArray();
+}
+
+function formatRngdleLeaderboard(standings) {
+    if (!standings.length) return null;
+
+    const shown = standings.slice(0, RNGDLE_LEADERBOARD_LIMIT);
+    const lines = shown.map((t, i) => {
+        const days = `${t.days} ${t.days === 1 ? 'day' : 'days'}`;
+        let rank = `${i + 1}. `;
+        if (i === 0) rank = '🥇';
+        else if (i === 1) rank = '🥈';
+        else if (i === 2) rank = '🥉';
+        return `${rank}${t.name} — **${t.totalEp.toLocaleString()} EP** (${days}, best ${t.best.toLocaleString()})`;
+    });
+    if (standings.length > shown.length) lines.push(`…and ${standings.length - shown.length} more`);
+
+    return "🏅 **All-time RNGdle leaderboard** 🏅\n" +
+        "--------------------------------------\n" +
+        lines.join('\n');
+}
+
+// Kårer dagens vinder kl. 16 i København. Læser dagens rul fra databasen — der er
+// ingen beskeder at fortolke længere, så der er heller ikke noget at snyde med.
 async function announceRngdleWinner(env) {
     if (!env.DISCORD_BOT_TOKEN || !env.RNGDLE_CHANNEL_ID) return;
 
-    const now = new Date();
-    const parts = getCopenhagenParts(now);
+    const parts = getCopenhagenParts(new Date());
     if (parts.hour !== 16) return;
 
-    const after = snowflakeFromMs(copenhagenMidnightMs(now, parts));
-    const res = await fetch(
-        `https://discord.com/api/v10/channels/${env.RNGDLE_CHANNEL_ID}/messages?after=${after}&limit=100`,
-        { headers: { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` } }
-    );
-    if (!res.ok) return;
-    const messages = await res.json();
-
-    // Discord returns newest-first; walk oldest-to-newest so each user's first
-    // result of the day is the one that's kept.
-    messages.reverse();
-
     const banned = getBannedRngdleIds(env);
-    const firstResultByUser = new Map();
-    for (const msg of messages) {
-        // Botten poster selv dagens resultat i kanalen, og den besked matcher
-        // parseren — så den må aldrig kunne ende på stillingen.
-        if (msg.author.bot) continue;
-        // Bandlyste tælles slet ikke med: hverken som dagens vinder, i dagens
-        // deltagerliste eller i stillingen.
-        if (banned.has(msg.author.id)) continue;
-        if (firstResultByUser.has(msg.author.id)) continue;
-        const parsed = parseRngdleResult(msg.content);
-        if (!parsed) continue;
-        firstResultByUser.set(msg.author.id, {
-            ...parsed,
-            authorId: msg.author.id,
-            name: msg.member?.nick || msg.author.global_name || msg.author.username
-        });
-    }
-    if (firstResultByUser.size === 0) return;
-
-    const results = [...firstResultByUser.values()];
-    const best = results.reduce((a, b) => (b.ep > a.ep ? b : a));
-    const participantMentions = results.map(r => `<@${r.authorId}>`).join(' ');
-
-    let leaderboard;
+    const client = new MongoClient(env.MONGODB_URI);
+    let sections;
     try {
-        leaderboard = await updateRngdleLeaderboard(env, results, best, parts.dateKey);
-        // null betyder at dagen allerede er talt med — så er beskeden også
-        // sendt, og vi annoncerer ikke igen.
-        if (leaderboard === null) return;
-    } catch (err) {
-        // Stillingen kunne ikke opdateres. Dagens vinder er stadig værd at
-        // annoncere, så vi poster uden leaderboard frem for slet ikke.
-        console.log(`RNGdle leaderboard update failed: ${err.message}`);
-    }
+        await client.connect();
+        const db = client.db(DB_ELO_NAME);
 
-    const sections = [
-        `🎲 **RNGdle Result of the Day** 🎲`,
-        `🏆 Best roll: <@${best.authorId}> with **${best.ep.toLocaleString()} EP**!`,
-        `Participants today: ${participantMentions}`
-    ];
-    if (leaderboard?.length) sections.push(formatRngdleLeaderboard(leaderboard));
+        const match = { channelId: env.RNGDLE_CHANNEL_ID, dateKey: parts.dateKey };
+        if (banned.size) match.playerId = { $nin: [...banned] };
+        const todays = await db.collection(RNGDLE_ROLLS_COLLECTION).find(match).toArray();
+        if (todays.length === 0) return;
+
+        const best = todays.reduce((a, b) => (b.ep > a.ep ? b : a));
+        const participants = todays.map(r => `<@${r.playerId}>`).join(' ');
+
+        sections = [
+            `🎲 **RNGdle Result of the Day** 🎲`,
+            `🏆 Best roll: <@${best.playerId}> with **${best.number.toLocaleString()}** ` +
+            `— ${tierEmoji(best.tier)} **${best.ep.toLocaleString()} EP**!`,
+            `Participants today: ${participants}`
+        ];
+
+        const leaderboard = formatRngdleLeaderboard(await getRngdleStandings(db, env.RNGDLE_CHANNEL_ID, banned));
+        if (leaderboard) sections.push(leaderboard);
+    } finally {
+        await client.close();
+    }
 
     await fetch(`https://discord.com/api/v10/channels/${env.RNGDLE_CHANNEL_ID}/messages`, {
         method: "POST",
@@ -942,65 +1067,6 @@ async function announceRngdleWinner(env) {
             allowed_mentions: { parse: ["users"] }
         })
     });
-}
-
-// Hele stillingen ligger i ét dokument pr. kanal: den daglige beregning har kun
-// én skribent (cron'en), så der er ingen samtidighed at tage højde for, og hele
-// stillingen kan opdateres i én skrivning. lastCountedDate gør det harmløst hvis
-// samme dag skulle blive kørt to gange.
-//
-// Returnerer den opdaterede stilling, eller null hvis dagen allerede er talt med.
-async function updateRngdleLeaderboard(env, results, best, dateKey) {
-    const client = new MongoClient(env.MONGODB_URI);
-    try {
-        await client.connect();
-        const col = client.db(DB_ELO_NAME).collection(RNGDLE_COLLECTION);
-        const doc = await col.findOne({ channelId: env.RNGDLE_CHANNEL_ID });
-        if (doc?.lastCountedDate === dateKey) return null;
-
-        // Bandlyste ryger helt ud af stillingen — også de point de allerede har
-        // samlet. `results` er filtreret i forvejen, så de kommer ikke ind igen.
-        const banned = getBannedRngdleIds(env);
-        const byId = new Map(
-            (doc?.totals ?? []).filter(t => !banned.has(t.userId)).map(t => [t.userId, { ...t }])
-        );
-        for (const r of results) {
-            const entry = byId.get(r.authorId) ?? { userId: r.authorId, totalEp: 0, days: 0, wins: 0 };
-            entry.name = r.name; // navne kan skifte — brug altid det nyeste
-            entry.totalEp += r.ep;
-            entry.days += 1;
-            if (r.authorId === best.authorId) entry.wins += 1;
-            byId.set(r.authorId, entry);
-        }
-
-        const totals = [...byId.values()].sort((a, b) => b.totalEp - a.totalEp);
-        await col.updateOne(
-            { channelId: env.RNGDLE_CHANNEL_ID },
-            { $set: { lastCountedDate: dateKey, totals } },
-            { upsert: true }
-        );
-        return totals;
-    } finally {
-        await client.close();
-    }
-}
-
-// En Discord-besked kan højst være 2000 tegn, så stillingen skæres af frem for
-// at risikere at hele annonceringen bliver afvist.
-const RNGDLE_LEADERBOARD_LIMIT = 15;
-
-function formatRngdleLeaderboard(totals) {
-    const shown = totals.slice(0, RNGDLE_LEADERBOARD_LIMIT);
-    const lines = shown.map((t, i) => {
-        const days = `${t.days} ${t.days === 1 ? 'day' : 'days'}`;
-        const wins = `${t.wins} ${t.wins === 1 ? 'win' : 'wins'}`;
-        return `${i + 1}. ${t.name} — **${t.totalEp.toLocaleString()} EP** (${days}, ${wins})`;
-    });
-    if (totals.length > shown.length) lines.push(`…and ${totals.length - shown.length} more`);
-
-    return "🏅 **All-time RNGdle leaderboard** 🏅\n" +
-        "--------------------------------------\n" +
-        lines.join('\n');
 }
 
 // --- Hjælpefunktioner ---

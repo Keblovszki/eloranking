@@ -5,10 +5,10 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 RNGDLE_CHANNEL_ID = "1536627129691938846"
-# Comma-separated Discord user IDs that are banned from RNGdle. Their results are
-# ignored, they are wiped from the all-time leaderboard, and the bot denies them
-# write access to the channel. Deploy after changing.
-RNGDLE_BANNED_IDS = "1411995926301638731"
+# Comma-separated Discord user IDs that are banned from RNGdle: they cannot roll,
+# they are left out of the standings, and the bot denies them write access to the
+# channel. Empty = nobody is banned. Deploy after changing.
+RNGDLE_BANNED_IDS = ""
 
 # Cron is always UTC. Both entries fire daily; the handler only acts on the
 # one that lands at 16:00 in Copenhagen, since Copenhagen alternates between

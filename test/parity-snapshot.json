@@ -1,0 +1,16 @@
+{
+  "badges": 230,
+  "fingerprint": "d11c434ec08e59b444c186c6a6961ff65730781af17687c1cc2b075a348f6879",
+  "minEP": 1759,
+  "maxEP": 186186584,
+  "meanEP": 21539,
+  "tiers": {
+    "mythic": 10000,
+    "anomaly": 39996,
+    "epic": 50001,
+    "rare": 149998,
+    "uncommon": 249888,
+    "common": 489693,
+    "trash": 10425
+  }
+}
