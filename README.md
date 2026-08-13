@@ -101,6 +101,27 @@ over tid i `Rngdle`-kollektionen (ét dokument pr. kanal), og den samlede
 stilling vises i samme besked som dagens vinder. Der er ingen kommando til den —
 den følger automatisk med hver daglige annoncering.
 
+#### Bandlys en snyder
+
+Sæt `RNGDLE_BANNED_IDS` i `wrangler.toml` til en kommasepareret liste af Discord-bruger-ID'er
+(højreklik på brugeren i Discord → **Kopiér bruger-ID**; kræver Udviklertilstand under
+Indstillinger → Avanceret). Deploy bagefter med `npx wrangler deploy`.
+
+```toml
+RNGDLE_BANNED_IDS = "123456789012345678,987654321098765432"
+```
+
+En bandlyst bruger:
+
+- tælles ikke med i dagens resultat — hverken som vinder eller i deltagerlisten
+- fjernes helt fra all-time-stillingen, inklusive de point vedkommende allerede havde
+- får nægtet **Send Messages** i RNGdle-kanalen af botten
+
+Skriveblokeringen kræver at bottens rolle har **Manage Roles** i serveren og ligger **over**
+brugerens højeste rolle i rollelisten. Kan botten ikke sætte rettigheden, logges det og resten
+af bandlysningen virker stadig. Blokeringen og oprydningen i stillingen sker på næste
+cron-kørsel efter deploy.
+
 Peg til sidst din Discord-apps **Interactions Endpoint URL** hen på din deployede Worker-URL.
 
 ## Bidrag til projektet

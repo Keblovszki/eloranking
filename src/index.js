@@ -20,6 +20,7 @@ const MAX_REROLLS = 2;
 
 export default {
     async scheduled(event, env, ctx) {
+        ctx.waitUntil(enforceRngdleBans(env));
         ctx.waitUntil(announceRngdleWinner(env));
     },
 
@@ -822,6 +823,43 @@ function snowflakeFromMs(ms) {
     return ((BigInt(ms) - DISCORD_EPOCH_MS) << 22n).toString();
 }
 
+// Bandlyste spillere står som kommasepareret liste af Discord-bruger-ID'er i
+// wrangler.toml. Tom streng = ingen bandlyste.
+function getBannedRngdleIds(env) {
+    return new Set((env.RNGDLE_BANNED_IDS ?? "").split(',').map(s => s.trim()).filter(Boolean));
+}
+
+// Discord-tilladelser er ét bitfelt sendt som streng. Vi nægter både SEND_MESSAGES
+// og SEND_MESSAGES_IN_THREADS, så en bandlyst ikke bare kan poste i en tråd i stedet.
+const RNGDLE_DENY_WRITE_BITS = ((1n << 11n) | (1n << 38n)).toString();
+
+// Kører på hvert cron-tick — ikke kun kl. 16 — så en nyudrullet bandlysning slår
+// igennem så hurtigt som muligt. PUT overskriver hele brugerens overwrite, så det
+// er idempotent og harmløst at sætte den samme igen hver gang.
+async function enforceRngdleBans(env) {
+    if (!env.DISCORD_BOT_TOKEN || !env.RNGDLE_CHANNEL_ID) return;
+
+    for (const userId of getBannedRngdleIds(env)) {
+        const res = await fetch(
+            `https://discord.com/api/v10/channels/${env.RNGDLE_CHANNEL_ID}/permissions/${userId}`,
+            {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`,
+                    "X-Audit-Log-Reason": "Banned from RNGdle"
+                },
+                // type 1 = overwrite på et medlem (0 ville være en rolle).
+                body: JSON.stringify({ type: 1, allow: "0", deny: RNGDLE_DENY_WRITE_BITS })
+            }
+        );
+        // Typisk fordi bottens rolle mangler Manage Roles eller ligger under
+        // brugerens højeste rolle. Log og fortsæt — resten af bandlysningen
+        // (resultater og stilling) skal virke uanset.
+        if (!res.ok) console.log(`RNGdle ban: could not block ${userId} from writing (${res.status})`);
+    }
+}
+
 function parseRngdleResult(content) {
     if (!/RNGdle/i.test(content)) return null;
     // RNGdle formats EP with locale-dependent thousands separators
@@ -850,11 +888,15 @@ async function announceRngdleWinner(env) {
     // result of the day is the one that's kept.
     messages.reverse();
 
+    const banned = getBannedRngdleIds(env);
     const firstResultByUser = new Map();
     for (const msg of messages) {
         // Botten poster selv dagens resultat i kanalen, og den besked matcher
         // parseren — så den må aldrig kunne ende på stillingen.
         if (msg.author.bot) continue;
+        // Bandlyste tælles slet ikke med: hverken som dagens vinder, i dagens
+        // deltagerliste eller i stillingen.
+        if (banned.has(msg.author.id)) continue;
         if (firstResultByUser.has(msg.author.id)) continue;
         const parsed = parseRngdleResult(msg.content);
         if (!parsed) continue;
@@ -916,7 +958,12 @@ async function updateRngdleLeaderboard(env, results, best, dateKey) {
         const doc = await col.findOne({ channelId: env.RNGDLE_CHANNEL_ID });
         if (doc?.lastCountedDate === dateKey) return null;
 
-        const byId = new Map((doc?.totals ?? []).map(t => [t.userId, { ...t }]));
+        // Bandlyste ryger helt ud af stillingen — også de point de allerede har
+        // samlet. `results` er filtreret i forvejen, så de kommer ikke ind igen.
+        const banned = getBannedRngdleIds(env);
+        const byId = new Map(
+            (doc?.totals ?? []).filter(t => !banned.has(t.userId)).map(t => [t.userId, { ...t }])
+        );
         for (const r of results) {
             const entry = byId.get(r.authorId) ?? { userId: r.authorId, totalEp: 0, days: 0, wins: 0 };
             entry.name = r.name; // navne kan skifte — brug altid det nyeste
