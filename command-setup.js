@@ -41,12 +41,6 @@ const ALL_COMMANDS = [
     { name: "matches-overview", description: "See the status of current matches", type: 1 },
     { name: "stats", description: "See statistics for the current season", type: 1 },
     {
-        name: "edit-username",
-        description: "Edit your displayed username",
-        type: 1,
-        options: [{ name: "username", description: "Your new username", type: 3, required: true }]
-    },
-    {
         name: "single-accepted",
         description: "Accept a single challenge",
         type: 1,
