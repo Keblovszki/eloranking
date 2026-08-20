@@ -94,10 +94,16 @@ RNGdle er et terningspil i Discord. Hver spiller får **ét rul om dagen**: bott
 trækker et tilfældigt tal mellem 0 og 1.000.000 og giver point (EP) efter, hvor
 interessant tallet er. Point lægges sammen over tid til en fælles stilling.
 
-| Kommando        | Hvad den gør                                  |
-| --------------- | --------------------------------------------- |
-| `/roll`         | Rul dagens tal. Ét pr. spiller pr. døgn.      |
-| `/roll-ranking` | Den samlede EP-stilling for alle spillere.    |
+| Kommando                        | Hvad den gør                                                     |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `/roll`                         | Rul dagens tal. Ét pr. spiller pr. døgn.                         |
+| `/roll-ranking`                 | Den samlede EP-stilling for alle spillere.                       |
+| `/roll-ranking board:lowest`    | De dårligste enkeltrul nogensinde — hall of shame.               |
+| `/roll-ranking board:daily`     | Dagens felt indtil videre, bedste rul først.                     |
+
+`board:lowest` rangerer **rul**, ikke spillere, så den samme spiller kan fylde
+flere pladser. Den er sorteret på EP, ikke på tallets størrelse — små tal som 0,
+7 og 69 scorer skyhøjt og havner aldrig på den liste.
 
 Sæt `RNGDLE_CHANNEL_ID` i `wrangler.toml` til ID'et på den kanal, spillet skal
 køre i. De to kommandoer virker **kun** der, og de øvrige kommandoer virker

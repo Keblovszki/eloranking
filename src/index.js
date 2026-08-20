@@ -214,9 +214,27 @@ export default {
                     }
 
                     case "roll-ranking": {
-                        const standings = await getRngdleStandings(db, channel_id, getBannedRngdleIds(env));
-                        const board = formatRngdleLeaderboard(standings);
-                        return respondEphemeral(board ?? "Nobody has rolled yet. Use **/roll** to start.");
+                        const banned = getBannedRngdleIds(env);
+                        const board = options?.find(o => o.name === "board")?.value ?? "all-time";
+
+                        if (board === "lowest") {
+                            const worst = await getRngdleLowestRolls(db, channel_id, banned);
+                            return respondEphemeral(
+                                formatRngdleLowest(worst) ?? "Nobody has rolled yet. Use **/roll** to start."
+                            );
+                        }
+                        if (board === "daily") {
+                            const { dateKey } = getCopenhagenParts(new Date());
+                            const todays = await getRngdleDailyRolls(db, channel_id, banned, dateKey);
+                            return respondEphemeral(
+                                formatRngdleDaily(todays, dateKey) ?? "Nobody has rolled today yet. Use **/roll** to start."
+                            );
+                        }
+
+                        const standings = await getRngdleStandings(db, channel_id, banned);
+                        return respondEphemeral(
+                            formatRngdleLeaderboard(standings) ?? "Nobody has rolled yet. Use **/roll** to start."
+                        );
                     }
 
                     // --- RANKING OG BRUGER COMMANDS ---
@@ -786,8 +804,9 @@ export default {
                             `See rankings: **/single-ranking** or **/double-ranking**.\n\n` +
                             "**RNGDLE**\n" +
                             (env.RNGDLE_CHANNEL_ID
-                                ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is. **/roll-ranking** shows the all-time EP standings.`
-                                : `One roll a day with **/roll** — a random number scored on how interesting it is. **/roll-ranking** shows the all-time EP standings.`)
+                                ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is.\n`
+                                : `One roll a day with **/roll** — a random number scored on how interesting it is.\n`) +
+                            `**/roll-ranking** shows the all-time EP standings — pick **board** to see the lowest rolls ever or today's field instead.`
                         );
 
                     default:
@@ -1045,24 +1064,70 @@ async function getRngdleStandings(db, channelId, bannedIds) {
     ]).toArray();
 }
 
-function formatRngdleLeaderboard(standings) {
-    if (!standings.length) return null;
+// De dårligste enkeltrul nogensinde. Her rangeres RULLENE, ikke spillerne — samme
+// spiller kan sagtens ligge på flere pladser, det er hele pointen med en hall of
+// shame. Bemærk at lave TAL ikke hører hjemme her: 0, 7 og 69 scorer skyhøjt.
+// Ældste rul først ved lige EP, så listen ikke hopper rundt mellem to kald.
+async function getRngdleLowestRolls(db, channelId, bannedIds) {
+    const match = { channelId };
+    if (bannedIds?.size) match.playerId = { $nin: [...bannedIds] };
 
-    const shown = standings.slice(0, RNGDLE_LEADERBOARD_LIMIT);
-    const lines = shown.map((t, i) => {
-        const days = `${t.days} ${t.days === 1 ? 'day' : 'days'}`;
-        const wins = `${t.wins} ${t.wins === 1 ? 'win' : 'wins'}`;
-        let rank = `${i + 1}. `;
-        if (i === 0) rank = '🥇';
-        else if (i === 1) rank = '🥈';
-        else if (i === 2) rank = '🥉';
-        return `${rank}${t.name} — **${t.totalEp.toLocaleString()} EP** (${days}, ${wins}, best ${t.best.toLocaleString()})`;
-    });
-    if (standings.length > shown.length) lines.push(`…and ${standings.length - shown.length} more`);
+    return db.collection(RNGDLE_ROLLS_COLLECTION)
+        .find(match)
+        .sort({ ep: 1, rolledAt: 1 })
+        .limit(RNGDLE_LEADERBOARD_LIMIT)
+        .toArray();
+}
 
-    return "🏅 **All-time RNGdle leaderboard** 🏅\n" +
+// Dagens felt, bedste rul først. Dagen er ikke afgjort før annonceringen kl. 16,
+// så det her er en mellemstilling — derfor ingen medaljer, kun rækkefølgen.
+async function getRngdleDailyRolls(db, channelId, bannedIds, dateKey) {
+    const match = { channelId, dateKey };
+    if (bannedIds?.size) match.playerId = { $nin: [...bannedIds] };
+
+    return db.collection(RNGDLE_ROLLS_COLLECTION)
+        .find(match)
+        .sort({ ep: -1, rolledAt: 1 })
+        .toArray();
+}
+
+// Fælles ramme om de tre stillinger: overskrift, streg og loftet på antal linjer.
+function formatRngdleBoard(title, entries, line) {
+    if (!entries.length) return null;
+
+    const shown = entries.slice(0, RNGDLE_LEADERBOARD_LIMIT);
+    const lines = shown.map(line);
+    if (entries.length > shown.length) lines.push(`…and ${entries.length - shown.length} more`);
+
+    return `${title}\n` +
         "--------------------------------------\n" +
         lines.join('\n');
+}
+
+function rankPrefix(i) {
+    return i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}. `;
+}
+
+function formatRngdleLeaderboard(standings) {
+    return formatRngdleBoard("🏅 **All-time RNGdle leaderboard** 🏅", standings, (t, i) => {
+        const days = `${t.days} ${t.days === 1 ? 'day' : 'days'}`;
+        const wins = `${t.wins} ${t.wins === 1 ? 'win' : 'wins'}`;
+        return `${rankPrefix(i)}${t.name} — **${t.totalEp.toLocaleString()} EP** (${days}, ${wins}, best ${t.best.toLocaleString()})`;
+    });
+}
+
+// Forespørgslen henter allerede kun RNGDLE_LEADERBOARD_LIMIT rul, så der er aldrig
+// et "…and N more" at vise her — listen ER de værste, ikke en afkortning af dem.
+function formatRngdleLowest(rolls) {
+    return formatRngdleBoard("🗑️ **All-time lowest rolls** 🗑️", rolls, (r, i) =>
+        `${i + 1}. ${r.name} — 🎲 **${r.number}** ${tierEmoji(r.tier)} **${r.ep.toLocaleString()} EP** (${r.dateKey})`
+    );
+}
+
+function formatRngdleDaily(rolls, dateKey) {
+    return formatRngdleBoard(`📅 **RNGdle today — ${dateKey}** 📅`, rolls, (r, i) =>
+        `${i + 1}. ${r.name} — 🎲 **${r.number}** ${tierEmoji(r.tier)} **${r.ep.toLocaleString()} EP**`
+    );
 }
 
 // Kårer dagens vinder kl. 16 i København. Læser dagens rul fra databasen — der er
