@@ -12,7 +12,7 @@ const SETTINGS_COLLECTION = "Settings";
 // starter forfra her.
 const RNGDLE_ROLLS_COLLECTION = "RngdleRolls";
 // Kommandoer der hører til spillet frem for Elo-ranglisten.
-const RNGDLE_COMMANDS = new Set(["roll", "roll-ranking"]);
+const RNGDLE_COMMANDS = new Set(["roll", "roll-ranking", "roll-stats"]);
 const HANNIBAL_ID = "253543574342205440";
 const K = 32;
 // En tilskuer får 20% af det holdet han satsede på vandt eller tabte — dog
@@ -235,6 +235,18 @@ export default {
                         return respondEphemeral(
                             formatRngdleLeaderboard(standings) ?? "Nobody has rolled yet. Use **/roll** to start."
                         );
+                    }
+
+                    case "roll-stats": {
+                        const banned = getBannedRngdleIds(env);
+                        const targetId = options?.find(o => o.name === "player")?.value ?? id;
+                        const stats = await getRngdlePlayerStats(db, channel_id, targetId, banned);
+                        if (!stats) {
+                            return respondEphemeral(targetId === id
+                                ? "You haven't rolled yet. Use **/roll** to start."
+                                : "That player hasn't rolled yet.");
+                        }
+                        return respondEphemeral(formatRngdlePlayerStats(stats));
                     }
 
                     // --- RANKING OG BRUGER COMMANDS ---
@@ -806,7 +818,8 @@ export default {
                             (env.RNGDLE_CHANNEL_ID
                                 ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is.\n`
                                 : `One roll a day with **/roll** — a random number scored on how interesting it is.\n`) +
-                            `**/roll-ranking** shows the all-time EP standings — pick **board** to see the lowest rolls ever or today's field instead.`
+                            `**/roll-ranking** shows the all-time EP standings — pick **board** to see the lowest rolls ever or today's field instead.\n` +
+                            `**/roll-stats** shows a player's stats — rolls, total EP, wins, best and lowest roll, and biggest badge.`
                         );
 
                     default:
@@ -1091,6 +1104,53 @@ async function getRngdleDailyRolls(db, channelId, bannedIds, dateKey) {
         .toArray();
 }
 
+// Alle stats for én spiller. Rullene er kilden til sandheden, så alt regnes forfra
+// derfra og kan ikke komme ud af trit. Bandlyste behandles som havde de ikke rullet
+// — helt som i stillingen, hvor de filtreres væk. Returnerer null, hvis spilleren
+// ikke har rullet (eller er bandlyst), så kaldstedet kan vise en pæn besked.
+async function getRngdlePlayerStats(db, channelId, playerId, bannedIds) {
+    if (bannedIds?.has(playerId)) return null;
+    const col = db.collection(RNGDLE_ROLLS_COLLECTION);
+
+    const rolls = await col.find({ channelId, playerId }).sort({ rolledAt: 1 }).toArray();
+    if (!rolls.length) return null;
+
+    // Dagssejre kræver dagens bedste rul på tværs af ALLE (ikke-bandlyste) spillere,
+    // ikke bare denne ene — derfor et separat opslag. Deler man dagen, vinder begge,
+    // præcis som i den samlede stilling.
+    const dayMatch = { channelId };
+    if (bannedIds?.size) dayMatch.playerId = { $nin: [...bannedIds] };
+    const dayMaxima = await col.aggregate([
+        { $match: dayMatch },
+        { $group: { _id: "$dateKey", maxEp: { $max: "$ep" } } }
+    ]).toArray();
+    const maxByDay = new Map(dayMaxima.map(d => [d._id, d.maxEp]));
+
+    let totalEp = 0, best = rolls[0], worst = rolls[0], wins = 0;
+    // Den dyreste ENKELTE badge spilleren nogensinde har optjent. Badges gemmes ikke
+    // på rullene, men computeRoll er en ren funktion, så de kan genberegnes fra tallet.
+    let biggestBadge = null, biggestBadgeNumber = null;
+    for (const r of rolls) {
+        totalEp += r.ep;
+        if (r.ep > best.ep) best = r;
+        if (r.ep < worst.ep) worst = r;
+        if (r.ep === maxByDay.get(r.dateKey)) wins++;
+        for (const b of computeRoll(r.number).badges) {
+            if (b.ep > 0 && (!biggestBadge || b.ep > biggestBadge.ep)) {
+                biggestBadge = b;
+                biggestBadgeNumber = r.number;
+            }
+        }
+    }
+
+    return {
+        name: rolls[rolls.length - 1].name,
+        rolls: rolls.length,
+        totalEp, wins, best, worst,
+        biggestBadge, biggestBadgeNumber
+    };
+}
+
 // Fælles ramme om de tre stillinger: overskrift, streg og loftet på antal linjer.
 function formatRngdleBoard(title, entries, line) {
     if (!entries.length) return null;
@@ -1128,6 +1188,30 @@ function formatRngdleDaily(rolls, dateKey) {
     return formatRngdleBoard(`📅 **RNGdle today — ${dateKey}** 📅`, rolls, (r, i) =>
         `${i + 1}. ${r.name} — 🎲 **${r.number}** ${tierEmoji(r.tier)} **${r.ep.toLocaleString()} EP**`
     );
+}
+
+function formatRngdlePlayerStats(s) {
+    const wins = `${s.wins} ${s.wins === 1 ? 'win' : 'wins'}`;
+    const rolls = `${s.rolls} ${s.rolls === 1 ? 'roll' : 'rolls'}`;
+    const lines = [
+        `📊 **RNGdle stats — ${s.name}** 📊`,
+        "--------------------------------------",
+        `🎲 Rolls: **${rolls}**   🏆 Daily wins: **${wins}**`,
+        `💰 Total EP: **${s.totalEp.toLocaleString()}**`,
+        formatStatRoll("📈 Best roll", s.best),
+        formatStatRoll("📉 Lowest roll", s.worst),
+    ];
+    if (s.biggestBadge) {
+        lines.push(
+            `🏅 Biggest badge: ${s.biggestBadge.emoji} **${s.biggestBadge.label}** ` +
+            `— **${s.biggestBadge.ep.toLocaleString()} EP** (from 🎲 ${s.biggestBadgeNumber})`
+        );
+    }
+    return lines.join('\n');
+}
+
+function formatStatRoll(label, r) {
+    return `${label}: 🎲 **${r.number}** ${tierEmoji(r.tier)} **${r.ep.toLocaleString()} EP** (${r.dateKey})`;
 }
 
 // Kårer dagens vinder kl. 16 i København. Læser dagens rul fra databasen — der er
