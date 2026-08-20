@@ -244,20 +244,10 @@ export default {
                         if (playerJoinCount > 0) return respond("You have already joined the ranking!");
 
                         await db.collection(PLAYERS_COLLECTION).insertOne({
-                            name: global_name, username: "", playerId: id, singleRanking: 1000, doubleRanking: 1000,
+                            name: global_name, playerId: id, singleRanking: 1000, doubleRanking: 1000,
                             wins: 0, loses: 0, winningStreak: 0, losingStreak: 0, channelId: channel_id, admin: false,
                         });
                         return respond(`${global_name} has just joined the ranking! To see the ranking you can use the **/single-ranking** or **/double-ranking** commands.`);
-
-                    case "edit-username":
-                        const newUsername = options[0].value;
-                        const updatedUser = await db.collection(PLAYERS_COLLECTION).findOneAndUpdate(
-                            { playerId: id, channelId: channel_id },
-                            { $set: { username: newUsername } },
-                            { returnDocument: 'after' }
-                        );
-                        if (!updatedUser) return respond(`${global_name} has not joined the ranking yet. Use **/join-ranking**.`);
-                        return respond(`You have changed your username to: ${newUsername}!`);
 
                     case "single-ranking":
                     case "double-ranking":
@@ -293,8 +283,7 @@ export default {
                             else if (currentRank === 2) rankPrefix = `🥈`;
                             else if (currentRank === 3) rankPrefix = `🥉`;
 
-                            const displayName = row.username ? row.username : row.name;
-                            return `${rankPrefix}${displayName}: ${currentScore} ${fire}${poop}`;
+                            return `${rankPrefix}${row.name}: ${currentScore} ${fire}${poop}`;
                         });
                         return respond(`🏆 **${isSingle ? "Single" : "Double"} Ranking** 🏆\n--------------------------------------\n` + printRows.join('\n'));
 
