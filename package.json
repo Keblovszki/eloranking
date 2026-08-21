@@ -4,7 +4,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node test/parity.mjs"
+    "test": "node test/parity.mjs && node test/reply.mjs"
   },
   "keywords": [],
   "author": "",
