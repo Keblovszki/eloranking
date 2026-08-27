@@ -397,7 +397,6 @@ export const BADGES = [
     ['DIGIT_SEVEN', 'Seven', '7️⃣', 100000100, c => c.n === 7],
     ['DIGIT_EIGHT', 'Eight', '8️⃣', 100000100, c => c.n === 8],
     ['DIGIT_NINE', 'Nine', '9️⃣', 100000100, c => c.n === 9],
-    ['TREE_FIDDY_EXACT', 'Exact Tree Fiddy', '🦕', 100000100, c => c.n === 350],
     ['SIXTY_SEVEN_EXACT', 'Exact Six-Seven', '🫠', 100000100, c => c.n === 67],
     ['EIGHTY_SIX_EXACT', 'Exact Eighty-Six', '🍽️', 100000100, c => c.n === 86],
     ['ORIENTATION_EXACT', 'Exact Orientation', '🧭', 100000100, c => c.n === 101],
@@ -437,6 +436,8 @@ export const BADGES = [
     ['DEEP_VOID_FIVE', 'Deep Void (5)', '⚫', 10000010, c => c.has('00000')],
     ['ONE_DIGIT', 'Single Digit', '☝️', 10000010, c => c.len === 1],
     ['QUINT_NINE', 'Quint Nine', '🥳', 10000010, c => c.s.endsWith('99999')],
+    ['EON', 'Eon', '🗿', 10000010, c => c.s.endsWith('00000')],
+    ['SEMI_EON', 'Semi-Eon', '🦴', 10000010, c => c.s.endsWith('50000')],
     ['SIXTH_POWER', '6th Power', '🎲', 9090918, c => isPerfectPower(c.n, 6)],
     ['POWER_OF_THREE', 'Power of Three', '🔺', 7692315, c => isPowerOf(c.n, 3)],
     ['FIFTH_POWER', '5th Power', '🖐️', 6250006, c => isPerfectPower(c.n, 5)],
@@ -463,7 +464,8 @@ export const BADGES = [
     // med (sum 0 = produkt 0), hvilket er bevidst.
     ['SPY', 'Spy Number', '🕵️', 1030929, c => c.n !== 1 && c.n !== 2 && c.sum === c.prod],
     ['QUAD_NINE', 'Quad Nine', '🎊', 1000001, c => c.s.endsWith('9999')],
-    ['SEMI_EPOCH', 'Semi-Epoch', '🗿', 1000001, c => c.s.endsWith('5000')],
+    ['SEMI_EPOCH', 'Semi-Epoch', '⌛', 1000001, c => c.s.endsWith('5000')],
+    ['EPOCH', 'Epoch', '🏛️', 1000001, c => c.s.endsWith('0000')],
     ['CUBE', '3rd Power', '🧊', 990100, c => isPerfectPower(c.n, 3)],
     ['EVEN_SPACING', 'Even Spacing', '📏', 862070, c => arithmetic(c.d)],
 
@@ -528,7 +530,6 @@ export const BADGES = [
     ['EMERGENCY', 'Emergency', '🚑', 25006, c => c.has('911')],
     ['PI_CONTAINS_3', 'Pi Slice (3)', '🥧', 25006, c => c.has('314')],
     ['E_CONTAINS_3', 'E Slice (3)', '📈', 25006, c => c.has('271')],
-    ['TREE_FIDDY', 'Tree Fiddy', '🦕', 25006, c => c.has('350')],
     ['CALENDAR', 'Calendar', '📅', 25006, c => c.has('365')],
     ['DIVISIBLE_BY_THREE', 'Divisible by Three', '🔺', 24414, c => c.d.every(x => x % 3 === 0)],
     ['SCRAMBLE', 'Scramble', '🔀', 22722, c => c.len >= 2 && c.distinct === c.len && (Math.max(...c.d) - Math.min(...c.d)) === c.len - 1],
@@ -545,16 +546,20 @@ export const BADGES = [
     ['CENTURY', 'Century', '💯', 10000, c => c.s.endsWith('00')],
     ['DOUBLE_NINE', 'Double Nine', '🎈', 10000, c => c.s.endsWith('99')],
     ['SEMI_CENTURY', 'Semi-Century', '🗓️', 10000, c => c.s.endsWith('50')],
+    ['QUARTER_CENTURY', 'Quarter-Century', '🪙', 10000, c => c.s.endsWith('25')],
+    ['THREE_QUARTER_CENTURY', 'Three-Quarter Century', '🕰️', 10000, c => c.s.endsWith('75')],
 
     // --- Uncommon ---
     ['QUADS', 'Four of a Kind', '🍀', 8436, c => c.maxCount >= 4],
     ['EQUATION', 'Equation', '🟰', 7720, c => hasEquation(c.s)],
     ['LOW_BALL', 'Low Ball', '📉', 6400, c => /^[0-4]+$/.test(c.s)],
-    ['CONTIGUOUS_TWO_PAIR', 'Contiguous Two Pair', '👨‍👩‍👧‍👦', 6142, c => { const a = contigPairStarts(c.s); for (let i = 0; i < a.length - 1; i++) if (a[i] + 2 === a[i + 1]) return true; return false; }],
     ['MOUNTAIN', 'Mountain', '🏔️', 5885, c => mountain(c.d)],
     ['DOUBLE_HOP', 'Double Hop', '🦘🦘', 5321, c => { if (c.len < 5 || c.distinct < 2) return false; for (let e = 0; e <= c.len - 5; e++) if (c.s[e + 2] === c.s[e] && c.s[e + 4] === c.s[e]) return true; return false; }],
     ['HIGH_ROLLER', 'High Roller', '🤑', 5120, c => /^[5-9]+$/.test(c.s)],
     ['VALLEY', 'Valley', '🏜️', 4199, c => valley(c.d)],
+    // To sammenhængende par lige ved siden af hinanden (ddee), hvor de to cifre er
+    // forskellige — ellers er det fire ens i træk (Contiguous Quads).
+    ['CONTIGUOUS_TWO_PAIR', 'Contiguous Two Pair', '👨‍👩‍👧‍👦', 3957, c => { for (let i = 0; i + 3 < c.len; i++) if (c.s[i] === c.s[i + 1] && c.s[i + 2] === c.s[i + 3] && c.s[i] !== c.s[i + 2]) return true; return false; }],
     ['MINI_ECHO', 'Mini Echo', '🔂', 3704, c => /(\d\d)\1/.test(c.s)],
     ['ALTERNATOR', 'Alternator', '⚡', 2845, c => alternator(c.d)],
     ['FLUSH', 'Flush', '🎨', 2845, c => allSameParity(c.d)],
@@ -592,7 +597,7 @@ export const BADGES = [
     ['PRIME', 'Prime Number', '💎', 1274, c => isPrime(c.n)],
     ['TRINITY', 'Trinity', '⚜️', 1265, c => c.distinct === 3],
     ['DOZEN', 'Dozen', '🍩', 1200, c => c.n > 0 && c.n % 12 === 0],
-    ['CANYON', 'Canyon', '🪨', 1184, c => { let rose = false, fell = false; for (let i = 1; i < c.len; i++) { const a = c.d[i], b = c.d[i - 1]; if (a < b) { if (rose) return false; fell = true; } else if (a > b) rose = true; } return rose && fell; }],
+    ['CANYON', 'Canyon', '🌄', 1184, c => { let rose = false, fell = false; for (let i = 1; i < c.len; i++) { const a = c.d[i], b = c.d[i - 1]; if (a < b) { if (rose) return false; fell = true; } else if (a > b) rose = true; } return rose && fell; }],
     ['FIVE_DIGITS', 'Five Digits', '🖐️', 1111, c => c.len === 5],
     ['ELEVEN', 'Eleven', '🕚', 1100, c => c.n > 0 && c.n % 11 === 0],
     ['HARSHAD', 'Harshad Number', '🤝', 1048, c => c.sum > 0 && c.n % c.sum === 0],
@@ -608,7 +613,7 @@ export const BADGES = [
     ['HETEROGENEOUS', 'Heterogeneous', '🥗', 593, c => c.distinct === c.len],
     ['MINI_SCRAMBLE', 'Mini Scramble', '🧩', 579, c => { for (let L = 3; L <= c.len; L++) for (let i = 0; i + L <= c.len; i++) if (isScrambledSeq(c.s.slice(i, i + L), 3)) return true; return false; }],
     ['GAP_ONE', 'Gap One', '↕️', 529, c => c.len >= 2 && Math.abs(c.d[0] - c.d[c.len - 1]) === 1],
-    ['TWO_PAIR', 'Two Pair', '👯‍♀️', 447, c => c.countExact(2) >= 2],
+    ['TWO_PAIR', 'Two Pair', '👯‍♀️', 377, c => Object.values(c.counts).filter(v => v >= 2).length >= 2],
     ['DUNES', 'Dunes', '🐫', 364, c => { let coll = c.s[0] ?? ''; for (let i = 1; i < c.len; i++) if (c.s[i] !== c.s[i - 1]) coll += c.s[i]; if (coll.length < 4) return false; for (let i = 2; i < coll.length; i++) { const p = +coll[i - 2], q = +coll[i - 1], r = +coll[i], a = q - p, b = r - q; if (a > 0 && b > 0 || a < 0 && b < 0) return false; } return true; }],
     // Et "hop" er samme ciffer med præcis ét andet imellem. Der skal findes ét af
     // længde 2 — er der tre eller flere i træk, er det Double Hop i stedet.
@@ -684,7 +689,6 @@ const FAMILIES = [
     ['ORIENTATION_EXACT', 'ORIENTATION'],
     ['MOUNTAIN', 'VALLEY', 'MESA', 'CANYON'],
     ['MINI_ECHO', 'RHYME'],
-    ['TREE_FIDDY_EXACT', 'TREE_FIDDY'],
     ['ERROR_EXACT', 'ERROR'],
     ['HILLS', 'DUNES'],
     ['PALINDROME', 'POCKET_MIRROR'],
