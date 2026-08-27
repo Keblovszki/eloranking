@@ -15,3 +15,9 @@ RNGDLE_BANNED_IDS = ""
 # UTC+1 (CET) and UTC+2 (CEST) across the year.
 [triggers]
 crons = ["0 14 * * *", "0 15 * * *"]
+
+# Gemmer logs i Cloudflare (Workers Logs) i stedet for kun at vise dem live i
+# `wrangler tail`. Fejlen her kommer sjældent og aldrig mens man kigger, så uden
+# gemte logs er der intet at kigge på bagefter.
+[observability]
+enabled = true

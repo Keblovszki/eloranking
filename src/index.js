@@ -24,6 +24,12 @@ const BET_MINIMUM = 1;
 // makker man gerne vil have — og så er der ikke meget "random" tilbage.
 const MAX_REROLLS = 2;
 
+// Uden en grænse venter driveren 30 sekunder på en database der ikke svarer.
+// Kvitteringen til Discord er allerede sendt på det tidspunkt, så brugeren ville
+// stå med en "tænker"-boble der aldrig bliver til noget. Fejler vi hurtigt,
+// fanger catch'en i replyToCommand det og skriver en rigtig fejlbesked.
+const MONGO_TIMEOUTS = { serverSelectionTimeoutMS: 5000, connectTimeoutMS: 5000 };
+
 export default {
     async scheduled(event, env, ctx) {
         ctx.waitUntil(enforceRngdleBans(env));
@@ -37,7 +43,13 @@ export default {
         const body = await request.arrayBuffer();
 
         const isValid = await verifyKey(body, signature, timestamp, env.DISCORD_PUBLIC_KEY);
-        if (!isValid) return new Response('Invalid signature', { status: 401 });
+        if (!isValid) {
+            // Discord viser "Applikationen svarede ikke" for ALT der ikke er et
+            // gyldigt svar — også et 401. Uden denne linje ser en afvist signatur
+            // ud som en helt normal "Ok"-invocation i loggen.
+            console.error(`Afvist signatur: sig=${!!signature} ts=${timestamp} bytes=${body.byteLength}`);
+            return new Response("Invalid signature", { status: 401 });
+        }
 
         const interaction = JSON.parse(new TextDecoder().decode(body));
 
@@ -58,7 +70,8 @@ export default {
                     data: { content: breakdown, flags: 64 }
                 });
             }
-            return new Response('Unknown component', { status: 400 });
+            console.error(`Ukendt komponent: ${customId}`);
+            return new Response("Unknown component", { status: 400 });
         }
 
         if (interaction.type === InteractionType.APPLICATION_COMMAND) {
@@ -119,7 +132,8 @@ export default {
                 data: EPHEMERAL_COMMANDS.has(name) ? { flags: 64 } : {}
             });
         }
-        return new Response('Unknown interaction', { status: 400 });
+        console.error(`Ukendt interaction-type: ${interaction.type}`);
+        return new Response("Unknown interaction", { status: 400 });
     }
 };
 
@@ -132,14 +146,22 @@ export default {
 export const EPHEMERAL_COMMANDS = new Set(["roll-ranking", "roll-stats", "bet"]);
 
 async function replyToCommand(interaction, env, ctx) {
+    // Én linje pr. kommando, også når alt gik godt. "Applikationen svarede ikke"
+    // kommer sjældent og aldrig mens nogen kigger med, så det afgørende er
+    // bagefter at kunne se om kommandoen overhovedet nåede frem, og hvor længe
+    // den var undervejs.
+    const started = Date.now();
+    const label = `${interaction.data.name} bruger=${interaction.member?.user?.id}`;
+
     let reply;
     try {
         reply = await runCommand(interaction, env, ctx);
     } catch (error) {
-        console.error("En fejl opstod i botten:", error);
+        console.error(`En fejl opstod i botten (${label}, ${Date.now() - started} ms):`, error);
         reply = { content: "❌ Der skete en uventet fejl i databasen. Prøv igen senere." };
     }
     await sendReply(interaction, reply);
+    console.log(`${label} leveret efter ${Date.now() - started} ms`);
 }
 
 // Kvitteringen er allerede sendt, så svaret leveres ved at redigere den.
@@ -180,7 +202,7 @@ async function runCommand(interaction, env, ctx) {
     const id = user.id;
     const channel_id = interaction.channel_id;
 
-    const client = new MongoClient(env.MONGODB_URI);
+    const client = new MongoClient(env.MONGODB_URI, MONGO_TIMEOUTS);
     try {
         await client.connect();
         const db = client.db(DB_ELO_NAME);
@@ -1295,7 +1317,7 @@ async function announceRngdleWinner(env) {
     if (parts.hour !== 16) return;
 
     const banned = getBannedRngdleIds(env);
-    const client = new MongoClient(env.MONGODB_URI);
+    const client = new MongoClient(env.MONGODB_URI, MONGO_TIMEOUTS);
     let sections;
     try {
         await client.connect();
