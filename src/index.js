@@ -76,9 +76,8 @@ export default {
 
         if (interaction.type === InteractionType.APPLICATION_COMMAND) {
             const { name, options } = interaction.data;
-            const { user, nick } = interaction.member;
-            const global_name = nick || user.global_name || user.username;
-            const id = user.id;
+            const global_name = memberDisplayName(interaction.member);
+            const id = interaction.member.user.id;
             const channel_id = interaction.channel_id;
 
             // RNGdle-kanalen og Elo-kanalerne holdes adskilt. Elo-kommandoerne
@@ -197,10 +196,10 @@ export async function sendReply(interaction, reply) {
 
 async function runCommand(interaction, env, ctx) {
     const { name, options } = interaction.data;
-    const { user, nick } = interaction.member;
-    const global_name = nick || user.global_name || user.username;
-    const id = user.id;
+    const global_name = memberDisplayName(interaction.member);
+    const id = interaction.member.user.id;
     const channel_id = interaction.channel_id;
+    const guild_id = interaction.guild_id;
 
     const client = new MongoClient(env.MONGODB_URI, MONGO_TIMEOUTS);
     try {
@@ -310,24 +309,25 @@ async function runCommand(interaction, env, ctx) {
             case "roll-ranking": {
                 const banned = getBannedRngdleIds(env);
                 const board = options?.find(o => o.name === "board")?.value ?? "all-time";
+                const rollNames = await fetchGuildDisplayNames(env, guild_id);
 
                 if (board === "lowest") {
                     const worst = await getRngdleLowestRolls(db, channel_id, banned);
                     return respondEphemeral(
-                        formatRngdleLowest(worst) ?? "Nobody has rolled yet. Use **/roll** to start."
+                        formatRngdleLowest(withCurrentNames(worst, rollNames)) ?? "Nobody has rolled yet. Use **/roll** to start."
                     );
                 }
                 if (board === "daily") {
                     const { dateKey } = getCopenhagenParts(new Date());
                     const todays = await getRngdleDailyRolls(db, channel_id, banned, dateKey);
                     return respondEphemeral(
-                        formatRngdleDaily(todays, dateKey) ?? "Nobody has rolled today yet. Use **/roll** to start."
+                        formatRngdleDaily(withCurrentNames(todays, rollNames), dateKey) ?? "Nobody has rolled today yet. Use **/roll** to start."
                     );
                 }
 
                 const standings = await getRngdleStandings(db, channel_id, banned);
                 return respondEphemeral(
-                    formatRngdleLeaderboard(standings) ?? "Nobody has rolled yet. Use **/roll** to start."
+                    formatRngdleLeaderboard(withCurrentNames(standings, rollNames, e => e._id)) ?? "Nobody has rolled yet. Use **/roll** to start."
                 );
             }
 
@@ -340,7 +340,10 @@ async function runCommand(interaction, env, ctx) {
                         ? "You haven't rolled yet. Use **/roll** to start."
                         : "That player hasn't rolled yet.");
                 }
-                return respondEphemeral(formatRngdlePlayerStats(stats));
+                const statsNames = await fetchGuildDisplayNames(env, guild_id);
+                return respondEphemeral(formatRngdlePlayerStats({
+                    ...stats, name: currentName(statsNames, targetId, stats.name)
+                }));
             }
 
             // --- RANKING OG BRUGER COMMANDS ---
@@ -366,6 +369,8 @@ async function runCommand(interaction, env, ctx) {
                 const rows = await db.collection(PLAYERS_COLLECTION).find({ channelId: channel_id }).sort({ [sortField]: -1 }).toArray();
                 if (rows.length === 0) return respond("Ingen spillere på ranglisten endnu.");
 
+                const rankNames = await fetchGuildDisplayNames(env, guild_id);
+
                 let currentRank = 0;
                 let lastElo = -1;
                 let playersAtSameElo = 1;
@@ -389,7 +394,7 @@ async function runCommand(interaction, env, ctx) {
                     else if (currentRank === 2) rankPrefix = `🥈`;
                     else if (currentRank === 3) rankPrefix = `🥉`;
 
-                    return `${rankPrefix}${row.name}: ${currentScore} ${fire}${poop}`;
+                    return `${rankPrefix}${currentName(rankNames, row.playerId, row.name)}: ${currentScore} ${fire}${poop}`;
                 });
                 return respond(`🏆 **${isSingle ? "Single" : "Double"} Ranking** 🏆\n--------------------------------------\n` + printRows.join('\n'));
 
@@ -398,6 +403,7 @@ async function runCommand(interaction, env, ctx) {
                 const sRows = await db.collection(PLAYERS_HISTORY_COLLECTION).find({ channelId: channel_id, seasonId: seasonId }).sort({ doubleRanking: -1 }).toArray();
                 if (sRows.length === 0) return respond(`No ranking data found for season: **${seasonId}**`);
 
+                const sNames = await fetchGuildDisplayNames(env, guild_id);
                 const seasonTitle = `🏆 **Ranking for Season: ${seasonId}** 🏆\n--------------------------------------`;
                 let sLastElo = -1;
                 let sCurrentRank = 0;
@@ -414,7 +420,7 @@ async function runCommand(interaction, env, ctx) {
                     else if (sCurrentRank === 2) rankPrefix = `🥈`;
                     else if (sCurrentRank === 3) rankPrefix = `🥉`;
 
-                    return `${rankPrefix}${row.name}: ${row.doubleRanking} ${fire}${poop}`;
+                    return `${rankPrefix}${currentName(sNames, row.playerId, row.name)}: ${row.doubleRanking} ${fire}${poop}`;
                 });
                 return respond([seasonTitle, ...sPrintRows].join('\n'));
 
@@ -422,15 +428,21 @@ async function runCommand(interaction, env, ctx) {
                 const statSettings = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
                 if (statSettings?.isBlind) return respond("🙈 **BLIND SEASON ER AKTIV!** 🙈\nStatistikker er skjult indtil sæsonen er slut!");
 
-                const statRows = await db.collection(PLAYERS_COLLECTION).find({ channelId: channel_id }).sort({ name: 1 }).toArray();
-                const statPrint = statRows.map(row => {
-                    const matchesPlayed = row.wins + row.loses;
-                    const winRate = matchesPlayed > 0 ? ((row.wins / matchesPlayed) * 100).toFixed(2) : 0;
-                    let currentStreak = "-";
-                    if (row.winningStreak > 0) currentStreak = `W${row.winningStreak}`;
-                    else if (row.losingStreak > 0) currentStreak = `L${row.losingStreak}`;
-                    return `${row.name} - MP: ${matchesPlayed}, WR: ${winRate}%, Streak: ${currentStreak}`;
-                });
+                const statRows = await db.collection(PLAYERS_COLLECTION).find({ channelId: channel_id }).toArray();
+                const statNames = await fetchGuildDisplayNames(env, guild_id);
+                // Listen står alfabetisk efter det navn der faktisk bliver vist,
+                // så sorteringen hører til her og ikke i databasen.
+                const statPrint = statRows
+                    .map(row => ({ ...row, shown: currentName(statNames, row.playerId, row.name) }))
+                    .sort((a, b) => a.shown.localeCompare(b.shown))
+                    .map(row => {
+                        const matchesPlayed = row.wins + row.loses;
+                        const winRate = matchesPlayed > 0 ? ((row.wins / matchesPlayed) * 100).toFixed(2) : 0;
+                        let currentStreak = "-";
+                        if (row.winningStreak > 0) currentStreak = `W${row.winningStreak}`;
+                        else if (row.losingStreak > 0) currentStreak = `L${row.losingStreak}`;
+                        return `${row.shown} - MP: ${matchesPlayed}, WR: ${winRate}%, Streak: ${currentStreak}`;
+                    });
                 if (statPrint.length > 0) return respond(statPrint.join('\n'));
                 return respond("There are no statistics yet!");
 
@@ -902,6 +914,68 @@ async function runCommand(interaction, env, ctx) {
     }
 }
 
+// --- Navne ---
+
+// Discord har tre navne pr. bruger: serverspecifikt nick, globalt visningsnavn og
+// det unikke username. Vi vil have det folk hedder i kanalen, så nick vinder.
+function memberDisplayName(member) {
+    return member.nick || member.user.global_name || member.user.username;
+}
+
+// Ranglisterne viser hvad folk hedder LIGE NU. Navnet på spilleren i databasen er
+// et øjebliksbillede fra /join-ranking (eller fra rullet), så en der har skiftet
+// nick siden ville ellers stå med sit gamle navn for evigt. Interaktionen rummer
+// kun medlemmet for den der kørte kommandoen, så resten hentes her — ét kald
+// dækker hele listen, uanset hvor mange der står på den.
+//
+// Kræver at GUILD_MEMBERS-intenten er slået til på applikationen i Discords
+// developer portal; uden den svarer Discord 403. Fejler opslaget — af den eller
+// enhver anden grund — falder visningen tilbage til de gemte navne, så en
+// rangliste aldrig udebliver bare fordi navneopslaget ikke lykkedes.
+async function fetchGuildDisplayNames(env, guildId) {
+    if (!env.DISCORD_BOT_TOKEN || !guildId) return null;
+
+    // 1000 er Discords maksimum for ét kald. Flere medlemmer end det kræver
+    // paginering, men så er vi milevidt fra den vennegruppe botten er bygget til.
+    const res = await fetch(
+        `https://discord.com/api/v10/guilds/${guildId}/members?limit=1000`,
+        { headers: { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` } }
+    );
+    if (!res.ok) {
+        console.log(`Kunne ikke hente servermedlemmer (${res.status}) — viser de gemte navne i stedet`);
+        return null;
+    }
+
+    const members = await res.json();
+    return new Map(members.map(m => [m.user.id, memberDisplayName(m)]));
+}
+
+// Kanalen kender sin server. Bruges kun af cron-annonceringen, som ikke har en
+// interaktion at læse guild_id af.
+async function fetchChannelGuildId(env, channelId) {
+    const res = await fetch(`https://discord.com/api/v10/channels/${channelId}`, {
+        headers: { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` }
+    });
+    if (!res.ok) {
+        console.log(`Kunne ikke slå kanalens server op (${res.status})`);
+        return null;
+    }
+    return (await res.json()).guild_id;
+}
+
+// Faldt opslaget fra, eller har spilleren forladt serveren, står det gemte navn
+// tilbage — det er stadig bedre end en tom plads på ranglisten.
+function currentName(names, playerId, stored) {
+    return names?.get(playerId) ?? stored;
+}
+
+// Samme opslag for RNGdle-boardene, hvor formateringen læser navnet af selve
+// rækken. playerId ligger i _id på den samlede stilling og i playerId på rullene.
+function withCurrentNames(entries, names, idOf = e => e.playerId) {
+    if (!names) return entries;
+    return entries.map(e => ({ ...e, name: currentName(names, idOf(e), e.name) }));
+}
+
 // --- Resultater ---
 
 // Ratingen skrives med $inc frem for læs-og-skriv, så to kampe der afregnes
@@ -1338,7 +1412,12 @@ async function announceRngdleWinner(env) {
             `Participants today: ${participants}`
         ];
 
-        const leaderboard = formatRngdleLeaderboard(await getRngdleStandings(db, env.RNGDLE_CHANNEL_ID, banned));
+        // Cron'en har ingen interaktion at læse guild-id'et af, så det slås op på
+        // kanalen. Mislykkes det, får stillingen bare de gemte navne.
+        const names = await fetchGuildDisplayNames(env, await fetchChannelGuildId(env, env.RNGDLE_CHANNEL_ID));
+        const standings = withCurrentNames(await getRngdleStandings(db, env.RNGDLE_CHANNEL_ID, banned), names, e => e._id);
+
+        const leaderboard = formatRngdleLeaderboard(standings);
         if (leaderboard) sections.push(leaderboard);
     } finally {
         await client.close();
