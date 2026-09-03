@@ -30,6 +30,7 @@ const ALL_COMMANDS = [
             name: "board", description: "Which leaderboard to see (default: all-time EP)", type: 3, required: false,
             choices: [
                 { name: "All-time EP", value: "all-time" },
+                { name: "Highest rolls ever", value: "highest" },
                 { name: "Lowest rolls ever", value: "lowest" },
                 { name: "Today", value: "daily" }
             ]
