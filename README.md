@@ -116,6 +116,13 @@ Døgnet følger København, ikke UTC. Hvert rul gemmes som ét dokument i
 ingen separat total, der kan komme ud af trit. Et unikt indeks på
 (kanal, spiller, dato) er det, der håndhæver ét rul om dagen.
 
+Slår et rul din egen højeste eller laveste EP — eller kanalens — bliver det sagt
+i rulbeskeden med det samme. Rekorderne regnes ud fra rullene i kanalen lige før
+dit eget, en global rekord fortrænger den personlige, og en tangering tæller
+ikke. Bandlystes rul holdes ude, ligesom i stillingen, og det allerførste rul i
+kanalen sætter ingen rekord — det ville trivielt være både det højeste og det
+laveste.
+
 #### Pointsystemet
 
 Tallet testes mod 230 badges — meme-tal (69, 420, 1337), palindromer, ens cifre,
