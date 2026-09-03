@@ -287,8 +287,8 @@ async function runCommand(interaction, env, ctx) {
 
             case "roll": {
                 const { dateKey } = getCopenhagenParts(new Date());
-                const { scored, alreadyRolled } = await rollForToday(
-                    db, channel_id, id, global_name, dateKey
+                const { scored, alreadyRolled, record } = await rollForToday(
+                    db, channel_id, id, global_name, dateKey, getBannedRngdleIds(env)
                 );
 
                 if (alreadyRolled) {
@@ -300,10 +300,13 @@ async function runCommand(interaction, env, ctx) {
                 // Rullet er offentligt — det er hele sjovet, og alle skal
                 // kunne se hvad de andre fik. Badge-listen holdes ude af den
                 // offentlige besked og kan i stedet hentes ephemeral med knappen.
-                return respond(
-                    `<@${id}> rolled:\n\n${formatRoll(scored)}`,
-                    rngdleBadgesRow(scored.number)
-                );
+                // En eventuel rekord nævnes derimod med det samme — den er kun
+                // sjov i øjeblikket, hvor den bliver sat.
+                const parts = [`<@${id}> rolled:`, formatRoll(scored)];
+                const recordLine = formatRecord(record);
+                if (recordLine) parts.push(recordLine);
+
+                return respond(parts.join('\n\n'), rngdleBadgesRow(scored.number));
             }
 
             case "roll-ranking": {
@@ -1151,9 +1154,49 @@ function randomRoll() {
     return v % span;
 }
 
-// Ruller dagens tal. Returnerer { roll, alreadyRolled } — har spilleren allerede
-// rullet i dag, får vi det gamle rul tilbage i stedet for et nyt.
-async function rollForToday(db, channelId, playerId, name, dateKey) {
+// Højeste og laveste EP der er set i kanalen før nu — både for alle og for
+// spilleren selv. Begge dele hentes i ét gennemløb: $cond nulstiller de andres rul,
+// og $min/$max springer null over, så personlige felter kommer tilbage som null
+// præcis når spilleren ikke har rullet før. Bandlyste holdes ude, ligesom i
+// stillingen, så en snyders gamle rul ikke kan sidde på rekorden.
+async function getRngdleRecords(db, channelId, playerId, bannedIds) {
+    const match = { channelId };
+    if (bannedIds?.size) match.playerId = { $nin: [...bannedIds] };
+
+    const mine = field => ({ $cond: [{ $eq: ["$playerId", playerId] }, field, null] });
+    const [rec] = await db.collection(RNGDLE_ROLLS_COLLECTION).aggregate([
+        { $match: match },
+        {
+            $group: {
+                _id: null,
+                globalMax: { $max: "$ep" }, globalMin: { $min: "$ep" },
+                personalMax: { $max: mine("$ep") }, personalMin: { $min: mine("$ep") }
+            }
+        }
+    ]).toArray();
+
+    return rec ?? null;
+}
+
+// Afgør hvilken rekord et rul på `ep` sætter, hvis nogen. Der skal slås strengt —
+// en tangering er ikke en rekord — og en global rekord fortrænger den personlige,
+// for den indebærer den allerede. Uden tidligere rul er der ingen rekord: det
+// allerførste rul i kanalen er trivielt både højeste og laveste.
+function recordFor(ep, rec) {
+    if (!rec) return null;
+    if (ep > rec.globalMax) return { scope: 'global', kind: 'high' };
+    if (ep < rec.globalMin) return { scope: 'global', kind: 'low' };
+    if (rec.personalMax === null) return null;
+    if (ep > rec.personalMax) return { scope: 'personal', kind: 'high' };
+    if (ep < rec.personalMin) return { scope: 'personal', kind: 'low' };
+    return null;
+}
+
+// Ruller dagens tal. Returnerer { roll, scored, alreadyRolled, record } — har
+// spilleren allerede rullet i dag, får vi det gamle rul tilbage i stedet for et nyt.
+// Rekorderne slås op FØR indsættelsen, så øjebliksbilledet er alt der lå før dette
+// rul, uden at vi skal filtrere det nye dokument fra bagefter.
+async function rollForToday(db, channelId, playerId, name, dateKey, bannedIds) {
     await ensureRollIndex(db);
     const col = db.collection(RNGDLE_ROLLS_COLLECTION);
 
@@ -1165,14 +1208,18 @@ async function rollForToday(db, channelId, playerId, name, dateKey) {
         rolledAt: new Date()
     };
 
+    const before = await getRngdleRecords(db, channelId, playerId, bannedIds);
+
     try {
         await col.insertOne(doc);
-        return { roll: doc, scored, alreadyRolled: false };
+        return { roll: doc, scored, alreadyRolled: false, record: recordFor(scored.totalEP, before) };
     } catch (err) {
         // 11000 = unique index violation, dvs. spilleren har rullet i dag.
         if (err.code !== 11000) throw err;
+        // Øjebliksbilledet indeholder spillerens eget rul fra i dag og siger derfor
+        // ingenting — og gensynet med dagens rul viser alligevel ingen rekord.
         const existing = await col.findOne({ channelId, playerId, dateKey });
-        return { roll: existing, scored: computeRoll(existing.number), alreadyRolled: true };
+        return { roll: existing, scored: computeRoll(existing.number), alreadyRolled: true, record: null };
     }
 }
 
@@ -1186,6 +1233,19 @@ function formatRoll(scored) {
         `🎲 **${scored.number}**`,
         `${tierEmoji(scored.tier)} **${scored.tier.toUpperCase()}** — **${scored.totalEP.toLocaleString()} EP**`
     ].join('\n\n');
+}
+
+// Rekordlinjen der hænges på det offentlige rul. Kun én linje ad gangen — recordFor
+// har allerede afgjort hvilken der er den stærkeste.
+const RNGDLE_RECORD_LINES = {
+    'global:high': "👑 **NEW ALL-TIME HIGH** — nobody here has ever rolled better!",
+    'global:low': "💀 **NEW ALL-TIME LOW** — the worst roll this channel has ever seen.",
+    'personal:high': "🎉 **New personal record** — your best roll ever!",
+    'personal:low': "📉 **New personal low** — you have never done worse.",
+};
+
+function formatRecord(record) {
+    return record ? RNGDLE_RECORD_LINES[`${record.scope}:${record.kind}`] : null;
 }
 
 // Kun badges der rent faktisk giver point vises — de fortrængte ville bare støje
