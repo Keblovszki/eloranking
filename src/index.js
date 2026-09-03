@@ -291,9 +291,14 @@ async function runCommand(interaction, env, ctx) {
                     db, channel_id, id, global_name, dateKey
                 );
 
+                // Rullet er allerede gemt her, så percentilen tæller det selv med.
+                const percentile = await getRollPercentile(
+                    db, channel_id, scored.totalEP, getBannedRngdleIds(env)
+                );
+
                 if (alreadyRolled) {
                     return respondEphemeral(
-                        `You already rolled today.\n\n${formatRoll(scored)}\n\nCome back tomorrow.`,
+                        `You already rolled today.\n\n${formatRoll(scored, percentile)}\n\nCome back tomorrow.`,
                         rngdleBadgesRow(scored.number)
                     );
                 }
@@ -301,7 +306,7 @@ async function runCommand(interaction, env, ctx) {
                 // kunne se hvad de andre fik. Badge-listen holdes ude af den
                 // offentlige besked og kan i stedet hentes ephemeral med knappen.
                 return respond(
-                    `<@${id}> rolled:\n\n${formatRoll(scored)}`,
+                    `<@${id}> rolled:\n\n${formatRoll(scored, percentile)}`,
                     rngdleBadgesRow(scored.number)
                 );
             }
@@ -1181,11 +1186,30 @@ async function rollForToday(db, channelId, playerId, name, dateKey) {
 const RNGDLE_BADGE_LIMIT = 12;
 const RNGDLE_LEADERBOARD_LIMIT = 15;
 
-function formatRoll(scored) {
-    return [
+// Én percentilside pænt formateret. Vi viser kun få decimaler, så "0,003 %" ikke
+// drukner i støj: store tal rundes til hele, ellers holder vi to betydende cifre.
+// Klampes til [0,1; 100], så vi hverken lover "0 %" (umuligt — rullet tæller sig selv
+// med) eller mere end 100 %.
+function formatPercentSide(percent) {
+    const p = Math.min(100, Math.max(0.1, percent));
+    return p >= 10 ? Math.round(p).toString() : p.toFixed(p >= 1 ? 1 : 2);
+}
+
+// Vis den side rullet hører til: er det i den bedre halvdel, er "top X %" mest
+// sigende; ligger det i bunden, læser "bund Y %" langt bedre end "top 88 %".
+function formatPercentile(percentile) {
+    return percentile.topPercent <= percentile.bottomPercent
+        ? `📊 Top ${formatPercentSide(percentile.topPercent)}% of all rolls`
+        : `📊 Bottom ${formatPercentSide(percentile.bottomPercent)}% of all rolls`;
+}
+
+function formatRoll(scored, percentile) {
+    const lines = [
         `🎲 **${scored.number}**`,
         `${tierEmoji(scored.tier)} **${scored.tier.toUpperCase()}** — **${scored.totalEP.toLocaleString()} EP**`
-    ].join('\n\n');
+    ];
+    if (percentile) lines.push(formatPercentile(percentile));
+    return lines.join('\n\n');
 }
 
 // Kun badges der rent faktisk giver point vises — de fortrængte ville bare støje
@@ -1258,6 +1282,30 @@ async function getRngdleLowestRolls(db, channelId, bannedIds) {
         .sort({ ep: 1, rolledAt: 1 })
         .limit(RNGDLE_LEADERBOARD_LIMIT)
         .toArray();
+}
+
+// Hvor godt ligger ét rul mod alle rul nogensinde i kanalen? Vi tæller både hvor
+// mange rul der er mindst lige så høje (top) og mindst lige så lave (bund) og deler
+// med totalen. Begge sider regnes ærligt hver for sig, så vi kan vise den side rullet
+// hører til: et topscore-rul bliver "top 0,x %", et 0 EP-rul "bund 0,x %".
+// Bandlyste tælles ikke med, helt som i de øvrige opgørelser. Kald EFTER at rullet
+// er gemt, så det tæller sig selv med (og totalen aldrig er 0).
+async function getRollPercentile(db, channelId, ep, bannedIds) {
+    const match = { channelId };
+    if (bannedIds?.size) match.playerId = { $nin: [...bannedIds] };
+
+    const col = db.collection(RNGDLE_ROLLS_COLLECTION);
+    const [total, atOrAbove, atOrBelow] = await Promise.all([
+        col.countDocuments(match),
+        col.countDocuments({ ...match, ep: { $gte: ep } }),
+        col.countDocuments({ ...match, ep: { $lte: ep } })
+    ]);
+    if (!total) return null;
+    return {
+        topPercent: (atOrAbove / total) * 100,
+        bottomPercent: (atOrBelow / total) * 100,
+        total
+    };
 }
 
 // Dagens felt, bedste rul først. Dagen er ikke afgjort før annonceringen kl. 16,
