@@ -9,6 +9,7 @@ En Discord-bot der holder styr på Elo-ranking for single- og double-kampe. Bygg
 - Elo-ranking for både single- og double-kampe
 - Sæsoner med historik og statistik
 - Udfordringer, resultatrapportering og accept/afvis-flow
+- Holdnavne, som et makkerpar selv sætter pr. kanal
 - Admin-kommandoer (nulstil sæson, annullér kampe m.m.)
 
 ## Tech stack
@@ -75,6 +76,51 @@ $env:APP_ID="din_app_id"; $env:BOT_TOKEN="din_bot_token"; node command-setup.js
 
 - `APP_ID`: Discord Developer Portal → **General Information** → Application ID
 - `BOT_TOKEN`: Discord Developer Portal → **Bot** → **Reset Token**
+
+## Holdnavne
+
+Et makkerpar kan give sig selv et navn, så doubler ikke bare er "Team 1" og
+"Team 2". Et hold ER de to spillere: dit holdnavn hænger på hvem du spiller med,
+og de to spillere er de eneste der kan ændre det — det følger af kommandoen, som
+kun kan navngive det hold man selv er den ene halvdel af.
+
+| Kommando                                  | Hvad den gør                                     |
+| ----------------------------------------- | ------------------------------------------------ |
+| `/set-team-name teammate:@X name:Navnet`  | Døber holdet dig + X.                            |
+| `/set-team-name teammate:@X`              | Fjerner navnet igen (`name` udeladt).            |
+| `/team-name teammate:@X`                  | Viser hvad I to hedder.                          |
+| `/team-list`                              | Alle navngivne hold i kanalen.                   |
+
+Navne er **pr. kanal**, ligesom ranglisten. Det samme makkerpar kan hedde noget
+forskelligt i to kanaler, og et navn taget i den ene kanal blokerer ikke i den
+anden.
+
+Nummeret bliver altid stående foran navnet:
+
+```
+The teams are:
+Team 1 — Nordic Chaos: @mikkel, @Christian Lund (elo: 983)
+Team 2: @Morten, @Lukas (elo: 1017.5)
+```
+
+Det er nummeret `/result team_1_score:` og `/bet team:1` peger på, så et hold der
+kun stod med sit navn ville efterlade folk uden en reference. Hold uden navn står
+som før. Navnet vises i `/play`, `/reroll`, `/play-double`, `/double-accepted`,
+`/matches-overview`, `/result`, `/bet` og i væddemålsafregningen.
+
+To hold i samme kanal kan ikke hedde det samme — store og små bogstaver tæller
+ikke med. Reglen håndhæves af et unikt indeks på (kanal, navn), ikke af en
+læsning inden skrivningen, så to der omdøber samtidig ikke kan slippe forbi
+hinanden. Navnet må være 2–40 tegn og må ikke indeholde `@` eller markdown-tegn:
+det står midt i en offentlig besked, og skal hverken kunne pinge nogen eller
+brække formateringen.
+
+Begge spillere skal være med på ranglisten i kanalen (`/join-ranking`). Navnene
+ligger i `Teams`-kollektionen, ét dokument pr. makkerpar pr. kanal; intet dokument
+betyder bare "intet navn", så der er ikke noget at migrere.
+
+De tre kommandoer skal registreres i Discord med `command-setup.js` — se
+afsnittet ovenfor.
 
 ## Deploy til produktion
 

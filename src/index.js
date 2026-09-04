@@ -7,6 +7,9 @@ const PLAYERS_COLLECTION = "Players";
 const PLAYERS_HISTORY_COLLECTION = "Seasons";
 const GAMES_COLLECTION = "Games";
 const SETTINGS_COLLECTION = "Settings";
+// Ét dokument pr. makkerpar pr. kanal. Findes der intet dokument, har parret
+// bare ikke noget navn — det er hele "migreringen".
+const TEAMS_COLLECTION = "Teams";
 // Ét dokument pr. rul. Den gamle "Rngdle"-kollektion stammer fra dengang pointene
 // blev skrabet ud af beskeder i kanalen; den bruges ikke længere, og stillingen
 // starter forfra her.
@@ -142,7 +145,7 @@ export default {
 // kvitterer, for en besked kan ikke skifte synlighed bagefter. /roll står ikke
 // på listen: den er offentlig i det almindelige tilfælde, og sendReply klarer
 // det ephemerale "du har allerede rullet i dag".
-export const EPHEMERAL_COMMANDS = new Set(["roll-ranking", "roll-stats", "bet"]);
+export const EPHEMERAL_COMMANDS = new Set(["roll-ranking", "roll-stats", "bet", "team-name", "team-list"]);
 
 async function replyToCommand(interaction, env, ctx) {
     // Én linje pr. kommando, også når alt gik godt. "Applikationen svarede ikke"
@@ -531,7 +534,8 @@ async function runCommand(interaction, env, ctx) {
                 });
 
                 const dBlind = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
-                return respond(`<@${dPlayer.playerId}> and <@${partner.playerId}> (elo: ${dBlind?.isBlind ? "???" : teamElo}) have created a game. Now someone else has to accept the challenge!`);
+                const dTeamName = await findTeamName(db, channel_id, id, partnerId);
+                return respond(`<@${dPlayer.playerId}> and <@${partner.playerId}>${dTeamName ? ` (**${dTeamName}**)` : ""} (elo: ${dBlind?.isBlind ? "???" : teamElo}) have created a game. Now someone else has to accept the challenge!`);
 
             case "double-accepted":
                 const daPlayer = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
@@ -564,7 +568,8 @@ async function runCommand(interaction, env, ctx) {
                 if (!daGame) return respond("The creator has not created any game to be accepted.");
 
                 const daBlind = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
-                return respond(`A game is created between: \nTeam 1: <@${daGame.playerId1}>, <@${daGame.playerId2}> (elo: ${daBlind?.isBlind ? "???" : daGame.teamElo1}) \nTeam 2: <@${daGame.playerId3}>, <@${daGame.playerId4}> (elo: ${daBlind?.isBlind ? "???" : daGame.teamElo2}) \n\nHave a nice game!`);
+                const daNames = await getGameTeamNames(db, channel_id, daGame);
+                return respond(`A game is created between: \n${teamHeading(1, daNames[1])}: <@${daGame.playerId1}>, <@${daGame.playerId2}> (elo: ${daBlind?.isBlind ? "???" : daGame.teamElo1}) \n${teamHeading(2, daNames[2])}: <@${daGame.playerId3}>, <@${daGame.playerId4}> (elo: ${daBlind?.isBlind ? "???" : daGame.teamElo2}) \n\nHave a nice game!`);
 
             case "play":
                 // Double-random logik
@@ -620,7 +625,14 @@ async function runCommand(interaction, env, ctx) {
                     });
 
                     const prBlind = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
-                    return respond(`${global_name} has joined the game! (4/4)\n\nThe teams are: \nTeam 1: <@${p1.playerId}>, <@${p2.playerId}> (elo: ${prBlind?.isBlind ? "???" : tElo1}) \nTeam 2: <@${p3.playerId}>, <@${p4.playerId}> (elo: ${prBlind?.isBlind ? "???" : tElo2}) \n\nHave a nice game!`);
+                    // Kampen er lige blevet skrevet, så holdene slås op ud fra de
+                    // fire spillere vi netop har fordelt frem for at læse den igen.
+                    const prNames = await getGameTeamNames(db, channel_id, {
+                        type: "double",
+                        playerId1: p1.playerId, playerId2: p2.playerId,
+                        playerId3: p3.playerId, playerId4: p4.playerId
+                    });
+                    return respond(`${global_name} has joined the game! (4/4)\n\nThe teams are: \n${teamHeading(1, prNames[1])}: <@${p1.playerId}>, <@${p2.playerId}> (elo: ${prBlind?.isBlind ? "???" : tElo1}) \n${teamHeading(2, prNames[2])}: <@${p3.playerId}>, <@${p4.playerId}> (elo: ${prBlind?.isBlind ? "???" : tElo2}) \n\nHave a nice game!`);
                 } else {
                     const count = [prGame.playerId1, prGame.playerId2, prGame.playerId3, prGame.playerId4].filter(x => x !== null).length;
                     return respond(`${global_name} has joined the game! (${count}/4)\n\n`);
@@ -653,7 +665,12 @@ async function runCommand(interaction, env, ctx) {
                 } else if (btStarted.length === 1) {
                     btGame = btStarted[0];
                 } else {
-                    const btList = btStarted.map((g, i) => `${i + 1}. ${getTeamLabel(g, 1)} - ${getTeamLabel(g, 2)}`);
+                    const btAll = await fetchTeamNames(db, channel_id,
+                        btStarted.flatMap(g => [gamePairKey(g, 1), gamePairKey(g, 2)]));
+                    const btList = btStarted.map((g, i) => {
+                        const n = teamNamesFrom(btAll, g);
+                        return `${i + 1}. ${getTeamLabel(g, 1, n)} - ${getTeamLabel(g, 2, n)}`;
+                    });
                     return respondEphemeral(`There are several started matches. Add the match number, for example **/bet team:1 match:2**\n\n${btList.join('\n')}`);
                 }
 
@@ -661,6 +678,8 @@ async function runCommand(interaction, env, ctx) {
                     return respondEphemeral("You can't bet on a match you are playing in yourself!");
                 }
                 if (btGame.bettingClosed) return respondEphemeral("The result for that match has already been reported, so betting is closed.");
+
+                const btNames = await getGameTeamNames(db, channel_id, btGame);
 
                 // Filteret gentager status-tjekket, så et væddemål ikke kan snige sig ind
                 // i samme øjeblik som resultatet bliver indberettet.
@@ -673,7 +692,7 @@ async function runCommand(interaction, env, ctx) {
                 if (btPlaced.matchedCount === 1) {
                     // Offentligt: at der er bettet — men ikke på hvad. Privat: holdet.
                     announce(`💰 ${global_name} placed a bet! 🤫`);
-                    return respondEphemeral(`💰 You bet on **Team ${btTeam}** (${getTeamLabel(btGame, btTeam)})! Only you can see this.`);
+                    return respondEphemeral(`💰 You bet on **${teamHeading(btTeam, btNames[btTeam])}** (${getTeamLabel(btGame, btTeam)})! Only you can see this.`);
                 }
 
                 const btChanged = await db.collection(GAMES_COLLECTION).updateOne(
@@ -682,7 +701,7 @@ async function runCommand(interaction, env, ctx) {
                 );
                 if (btChanged.matchedCount === 1) {
                     announce(`💰 ${global_name} moved their bet! 🤫`);
-                    return respondEphemeral(`💰 You moved your bet to **Team ${btTeam}** (${getTeamLabel(btGame, btTeam)})! Only you can see this.`);
+                    return respondEphemeral(`💰 You moved your bet to **${teamHeading(btTeam, btNames[btTeam])}** (${getTeamLabel(btGame, btTeam)})! Only you can see this.`);
                 }
 
                 return respondEphemeral("Betting just closed for that match.");
@@ -725,7 +744,10 @@ async function runCommand(interaction, env, ctx) {
                 if (!rrUpdated) return respond("The game changed while the teams were being rerolled. Try **/reroll** again.");
 
                 const rrBlind = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
-                return respond(`🎲 ${global_name} has rerolled the teams! (${rrUpdated.rerollCount}/${MAX_REROLLS})\n\nThe new teams are: \nTeam 1: <@${rrP1.playerId}>, <@${rrP2.playerId}> (elo: ${rrBlind?.isBlind ? "???" : rrElo1}) \nTeam 2: <@${rrP3.playerId}>, <@${rrP4.playerId}> (elo: ${rrBlind?.isBlind ? "???" : rrElo2}) \n\nHave a nice game!`);
+                // Nye makkerpar, altså også nye holdnavne — eller ingen, hvis de
+                // to der nu er endt sammen aldrig har navngivet sig selv.
+                const rrNames = await getGameTeamNames(db, channel_id, rrUpdated);
+                return respond(`🎲 ${global_name} has rerolled the teams! (${rrUpdated.rerollCount}/${MAX_REROLLS})\n\nThe new teams are: \n${teamHeading(1, rrNames[1])}: <@${rrP1.playerId}>, <@${rrP2.playerId}> (elo: ${rrBlind?.isBlind ? "???" : rrElo1}) \n${teamHeading(2, rrNames[2])}: <@${rrP3.playerId}>, <@${rrP4.playerId}> (elo: ${rrBlind?.isBlind ? "???" : rrElo2}) \n\nHave a nice game!`);
 
             case "cancel":
                 const cGame = await db.collection(GAMES_COLLECTION).findOne({
@@ -753,6 +775,88 @@ async function runCommand(interaction, env, ctx) {
                     return respond(`${global_name}'s game has been cancelled.`);
                 }
 
+            // --- HOLDNAVNE ---
+
+            case "set-team-name": {
+                const tnMateId = options.find(o => o.name === "teammate").value;
+                if (tnMateId === id) return respond("You can not be your own teammate.");
+
+                // Samme krav som /play-double: et holdnavn hører til to spillere
+                // der faktisk kan spille sammen i kanalen.
+                const tnPlayers = await db.collection(PLAYERS_COLLECTION)
+                    .find({ playerId: { $in: [id, tnMateId] }, channelId: channel_id }).toArray();
+                if (!tnPlayers.some(p => p.playerId === id)) return respond("You have not joined the ranking yet.");
+                if (!tnPlayers.some(p => p.playerId === tnMateId)) return respond("Your teammate has not joined the ranking yet.");
+
+                // Der er ingen rettighedstjek: man navngiver det hold man selv er
+                // den ene halvdel af, så det at være et af de to medlemmer følger
+                // af selve kommandoen.
+                const tnPairKey = teamPairKey(id, tnMateId);
+                const tnRaw = options.find(o => o.name === "name")?.value;
+
+                if (tnRaw === undefined) {
+                    const tnCleared = await db.collection(TEAMS_COLLECTION)
+                        .findOneAndDelete({ channelId: channel_id, pairKey: tnPairKey });
+                    if (!tnCleared) return respond(`<@${id}> and <@${tnMateId}> don't have a team name in this channel.`);
+                    return respond(`🏷️ <@${id}> and <@${tnMateId}> are no longer known as **${tnCleared.name}**.`);
+                }
+
+                const tnName = normalizeTeamName(tnRaw);
+                if (tnName.error) return respond(`❌ ${tnName.error}`);
+
+                await ensureTeamIndexes(db);
+                try {
+                    await db.collection(TEAMS_COLLECTION).updateOne(
+                        { channelId: channel_id, pairKey: tnPairKey },
+                        { $set: {
+                            name: tnName.name, nameKey: tnName.nameKey, setBy: id,
+                            playerIds: [id, tnMateId].sort(), updatedAt: new Date()
+                        } },
+                        { upsert: true }
+                    );
+                } catch (err) {
+                    // Det unikke indeks på (kanal, nameKey) ER reglen om at to hold
+                    // ikke kan hedde det samme — ikke en læsning inden skrivningen,
+                    // som to samtidige omdøbninger kunne slippe forbi.
+                    if (err.code === 11000) return respond(`**${tnName.name}** is already taken by another team in this channel.`);
+                    throw err;
+                }
+                return respond(`🏷️ <@${id}> and <@${tnMateId}> are now known as **${tnName.name}**!`);
+            }
+
+            case "team-name": {
+                const tvMateId = options.find(o => o.name === "teammate").value;
+                if (tvMateId === id) return respondEphemeral("You can not be your own teammate.");
+
+                const tvName = await findTeamName(db, channel_id, id, tvMateId);
+                if (!tvName) return respondEphemeral(`You and <@${tvMateId}> don't have a team name in this channel yet. Set one with **/set-team-name**.`);
+                return respondEphemeral(`🏷️ You and <@${tvMateId}> are known as **${tvName}**.`);
+            }
+
+            case "team-list": {
+                const tlTeams = await db.collection(TEAMS_COLLECTION).find({ channelId: channel_id }).toArray();
+                if (tlTeams.length === 0) return respondEphemeral("No teams have been named in this channel yet. Set one with **/set-team-name**.");
+
+                const tlIds = [...new Set(tlTeams.flatMap(t => t.playerIds))];
+                const tlPlayers = await db.collection(PLAYERS_COLLECTION)
+                    .find({ playerId: { $in: tlIds }, channelId: channel_id }).toArray();
+                const tlStored = new Map(tlPlayers.map(p => [p.playerId, p.name]));
+                const tlLive = await fetchGuildDisplayNames(env, guild_id);
+
+                const tlRows = tlTeams
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map(t => `**${t.name}** — ${t.playerIds
+                        .map(pid => currentName(tlLive, pid, tlStored.get(pid) ?? `<@${pid}>`))
+                        .join(' & ')}`);
+
+                // Discord afviser beskeder over 2000 tegn, så en meget lang liste
+                // skæres af frem for at forsvinde helt.
+                const tlShown = tlRows.slice(0, 40);
+                const tlRest = tlRows.length - tlShown.length;
+                return respondEphemeral(`🏷️ **Teams in this channel**\n${tlShown.join('\n')}` +
+                    (tlRest > 0 ? `\n\n…and ${tlRest} more.` : ""));
+            }
+
             // --- RESULTS OG ELO BEREGNING ---
 
             case "result":
@@ -773,7 +877,8 @@ async function runCommand(interaction, env, ctx) {
                 if (rGame.type === "single") {
                     return respond(`Result reported by ${global_name}: \n\n${rGame.playerName1}: ${fTeam1}\n${rGame.playerName2}: ${fTeam2}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
                 } else {
-                    return respond(`Result reported by ${global_name}: \n\nTeam 1: ${rGame.playerName1}, ${rGame.playerName2}: ${fTeam1}\nTeam 2: ${rGame.playerName3}, ${rGame.playerName4}: ${fTeam2}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
+                    const rNames = await getGameTeamNames(db, channel_id, rGame);
+                    return respond(`Result reported by ${global_name}: \n\n${teamHeading(1, rNames[1])}: ${rGame.playerName1}, ${rGame.playerName2}: ${fTeam1}\n${teamHeading(2, rNames[2])}: ${rGame.playerName3}, ${rGame.playerName4}: ${fTeam2}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
                 }
 
             case "reject":
@@ -833,7 +938,10 @@ async function runCommand(interaction, env, ctx) {
                 });
                 if (accOps.length > 0) await db.collection(PLAYERS_COLLECTION).bulkWrite(accOps);
 
-                const betSummary = await settleBets(db, aGame, t1Diff, t2Diff, channel_id, isAccBlind);
+                // Kun væddemålslinjerne nævner holdnavne, og de fleste kampe har
+                // ingen væddemål — så opslaget springes over når der ikke er nogen.
+                const accTeamNames = aGame.bets?.length ? await getGameTeamNames(db, channel_id, aGame) : null;
+                const betSummary = await settleBets(db, aGame, t1Diff, t2Diff, channel_id, isAccBlind, accTeamNames);
                 if (betSummary) accMessage += `\n${betSummary}`;
 
                 return respond(accMessage);
@@ -845,6 +953,20 @@ async function runCommand(interaction, env, ctx) {
 
                 if (matches.length === 0) return respond("No pending, started or resulting matches!");
 
+                // Alle kampes holdnavne i ét opslag, så oversigten ikke koster et
+                // opslag pr. kamp. Et hold der ikke er fyldt op endnu har ingen
+                // nøgle, og står derfor bare med spillerne.
+                const moKeyed = await fetchTeamNames(db, channel_id,
+                    matches.flatMap(m => [gamePairKey(m, 1), gamePairKey(m, 2)]));
+                const moDouble = (m, i) => {
+                    const names = teamNamesFrom(moKeyed, m);
+                    const side = (team, a, b) => {
+                        const players = `${a || "TBA"}, ${b || "TBA"}`;
+                        return names[team] ? `${names[team]} (${players})` : players;
+                    };
+                    return `${i + 1}. ${side(1, m.playerName1, m.playerName2)} - ${side(2, m.playerName3, m.playerName4)}`;
+                };
+
                 let moMessage = "";
                 const pending = matches.filter(m => m.status === "pending");
                 if (pending.length > 0) {
@@ -855,7 +977,7 @@ async function runCommand(interaction, env, ctx) {
                     }
                     const pDoubles = pending.filter(m => m.type === "double");
                     if (pDoubles.length > 0) {
-                        moMessage += "**DOUBLES:**\n" + pDoubles.map((m, i) => `${i+1}. ${m.playerName1}, ${m.playerName2} - ${m.playerName3 || "TBA"}, ${m.playerName4 || "TBA"}`).join('\n') + "\n\n";
+                        moMessage += "**DOUBLES:**\n" + pDoubles.map(moDouble).join('\n') + "\n\n";
                     }
                     const pRandom = pending.filter(m => m.type === "double-random");
                     if (pRandom.length > 0) {
@@ -875,7 +997,7 @@ async function runCommand(interaction, env, ctx) {
                     const sSingles = started.filter(m => m.type === "single");
                     if (sSingles.length > 0) moMessage += "**SINGLES:**\n" + sSingles.map((m, i) => `${i+1}. ${m.playerName1} - ${m.playerName2}`).join('\n') + "\n\n";
                     const sDoubles = started.filter(m => m.type === "double");
-                    if (sDoubles.length > 0) moMessage += "**DOUBLES:**\n" + sDoubles.map((m, i) => `${i+1}. ${m.playerName1}, ${m.playerName2} - ${m.playerName3}, ${m.playerName4}`).join('\n') + "\n\n";
+                    if (sDoubles.length > 0) moMessage += "**DOUBLES:**\n" + sDoubles.map(moDouble).join('\n') + "\n\n";
                 }
 
                 const results = matches.filter(m => m.status === "result");
@@ -884,7 +1006,7 @@ async function runCommand(interaction, env, ctx) {
                     const rSingles = results.filter(m => m.type === "single");
                     if (rSingles.length > 0) moMessage += "**SINGLES:**\n" + rSingles.map((m, i) => `${i+1}. ${m.playerName1} - ${m.playerName2}`).join('\n') + "\n\n";
                     const rDoubles = results.filter(m => m.type === "double");
-                    if (rDoubles.length > 0) moMessage += "**DOUBLES:**\n" + rDoubles.map((m, i) => `${i+1}. ${m.playerName1}, ${m.playerName2} - ${m.playerName3}, ${m.playerName4}`).join('\n') + "\n\n";
+                    if (rDoubles.length > 0) moMessage += "**DOUBLES:**\n" + rDoubles.map(moDouble).join('\n') + "\n\n";
                 }
 
                 return respond(moMessage);
@@ -909,6 +1031,10 @@ async function runCommand(interaction, env, ctx) {
                     "**BETTING**\n" +
                     `Not playing? Bet on a team with **/bet**. You win or lose ${BET_SHARE * 100}% of what that team gets (at least ${BET_MINIMUM}).\n` +
                     `Betting closes as soon as the result is reported.\n\n` +
+                    "**TEAM NAMES**\n" +
+                    `Name the team you and a teammate make up: **/set-team-name**. Leave *name* out to clear it.\n` +
+                    `Only the two of you can rename your team, and the name only counts in this channel.\n` +
+                    `See one team: **/team-name**. See them all: **/team-list**.\n\n` +
                     "**RANKING**\n" +
                     `See rankings: **/single-ranking** or **/double-ranking**.\n\n` +
                     "**RNGDLE**\n" +
@@ -991,6 +1117,93 @@ function withCurrentNames(entries, names, idOf = e => e.playerId) {
     return entries.map(e => ({ ...e, name: currentName(names, idOf(e), e.name) }));
 }
 
+// --- Holdnavne ---
+
+// Et hold ER de to spillere, ikke en rækkefølge: (a, b) og (b, a) skal give
+// samme nøgle, ellers ville makkerparret ende med to navne alt efter hvem der
+// skrev kommandoen. Nøglen er en streng frem for et array, fordi et unikt indeks
+// på et array-felt også matcher på enkeltelementer og ikke kun på hele arrayet.
+export function teamPairKey(playerIdA, playerIdB) {
+    return [playerIdA, playerIdB].sort().join('|');
+}
+
+// Navnet havner midt i en offentlig besked, så det må hverken kunne pinge nogen
+// (@everyone, @here, @bruger) eller rode med den omkringliggende markdown.
+const TEAM_NAME_FORBIDDEN = /[@*_~`|\\#]/;
+const TEAM_NAME_MIN = 2;
+const TEAM_NAME_MAX = 40;
+
+// Giver enten { name, nameKey } eller { error } med en besked der kan sendes
+// direkte videre til brugeren.
+export function normalizeTeamName(raw) {
+    // Linjeskift og dobbelte mellemrum ville trække holdlinjen fra hinanden i
+    // kampbeskeden, så al whitespace koges ned til ét mellemrum.
+    const name = (raw ?? "").replace(/\s+/g, ' ').trim();
+    if (name.length < TEAM_NAME_MIN) return { error: `A team name has to be at least ${TEAM_NAME_MIN} characters.` };
+    if (name.length > TEAM_NAME_MAX) return { error: `A team name can be at most ${TEAM_NAME_MAX} characters.` };
+    if (TEAM_NAME_FORBIDDEN.test(name)) return { error: "A team name can't contain @ * _ ~ ` | \\ or #." };
+    // Navnet vises præcis som skrevet, men to hold i samme kanal må ikke kunne
+    // hedde det samme bortset fra store og små bogstaver.
+    return { name, nameKey: name.toLowerCase() };
+}
+
+// Nummeret bliver stående foran navnet. Det er nummeret /result og /bet peger
+// på, så et hold der KUN stod med sit navn ville efterlade folk uden reference.
+export function teamHeading(teamNumber, teamName) {
+    return teamName ? `Team ${teamNumber} — ${teamName}` : `Team ${teamNumber}`;
+}
+
+// Ét navn pr. makkerpar og ét navn pr. kanal. Begge regler håndhæves af de
+// unikke indekser frem for af en læsning først, så to samtidige omdøbninger ikke
+// kan snige det samme navn ind to gange. Sikres én gang pr. isolate, som
+// rulindekset.
+let teamIndexesEnsured = null;
+function ensureTeamIndexes(db) {
+    if (!teamIndexesEnsured) {
+        teamIndexesEnsured = db.collection(TEAMS_COLLECTION).createIndexes([
+            { key: { channelId: 1, pairKey: 1 }, unique: true },
+            { key: { channelId: 1, nameKey: 1 }, unique: true }
+        ]).catch(err => { teamIndexesEnsured = null; throw err; });
+    }
+    return teamIndexesEnsured;
+}
+
+// Nøglen for det ene hold i en kamp — null hvis holdet ikke er samlet endnu,
+// eller hvis kampen er en single, hvor der ikke er noget makkerpar at navngive.
+function gamePairKey(game, team) {
+    if (!game || game.type === "single") return null;
+    const [a, b] = team === 1 ? [game.playerId1, game.playerId2] : [game.playerId3, game.playerId4];
+    return a && b ? teamPairKey(a, b) : null;
+}
+
+// Slår navnene op for et vilkårligt antal makkerpar på én gang. Oversigter over
+// flere kampe ville ellers koste et opslag pr. kamp.
+async function fetchTeamNames(db, channelId, pairKeys) {
+    const wanted = [...new Set(pairKeys.filter(Boolean))];
+    if (wanted.length === 0) return new Map();
+    const docs = await db.collection(TEAMS_COLLECTION)
+        .find({ channelId, pairKey: { $in: wanted } }).toArray();
+    return new Map(docs.map(d => [d.pairKey, d.name]));
+}
+
+// { 1: navn|null, 2: navn|null } — formen alle kampbeskederne forventer.
+function teamNamesFrom(names, game) {
+    return {
+        1: names.get(gamePairKey(game, 1)) ?? null,
+        2: names.get(gamePairKey(game, 2)) ?? null
+    };
+}
+
+async function getGameTeamNames(db, channelId, game) {
+    const names = await fetchTeamNames(db, channelId, [gamePairKey(game, 1), gamePairKey(game, 2)]);
+    return teamNamesFrom(names, game);
+}
+
+async function findTeamName(db, channelId, playerIdA, playerIdB) {
+    const key = teamPairKey(playerIdA, playerIdB);
+    return (await fetchTeamNames(db, channelId, [key])).get(key) ?? null;
+}
+
 // --- Resultater ---
 
 // Ratingen skrives med $inc frem for læs-og-skriv, så to kampe der afregnes
@@ -1025,9 +1238,13 @@ async function explainMissingResult(db, channelId, verb) {
 
 // --- Væddemål ---
 
-function getTeamLabel(game, team) {
+// teamNames er valgfrit: uden holdnavne står der bare spillerne, som før.
+function getTeamLabel(game, team, teamNames) {
     if (game.type === "single") return team === 1 ? game.playerName1 : game.playerName2;
-    return team === 1 ? `${game.playerName1} & ${game.playerName2}` : `${game.playerName3} & ${game.playerName4}`;
+    const players = team === 1
+        ? `${game.playerName1} & ${game.playerName2}`
+        : `${game.playerName3} & ${game.playerName4}`;
+    return teamNames?.[team] ? `${teamNames[team]} (${players})` : players;
 }
 
 // teamScore afgør retningen, ikke fortegnet på teamEloDiff. En stor favorit der
@@ -1039,7 +1256,7 @@ function calculateBetPayout(teamScore, teamEloDiff) {
     return 0; // uafgjort: væddemålet er dødt
 }
 
-async function settleBets(db, game, team1Diff, team2Diff, channelId, isBlind) {
+async function settleBets(db, game, team1Diff, team2Diff, channelId, isBlind, teamNames) {
     const bets = game.bets || [];
     if (bets.length === 0) return "";
 
@@ -1063,7 +1280,7 @@ async function settleBets(db, game, team1Diff, team2Diff, channelId, isBlind) {
         const payout = calculateBetPayout(teamScore, teamEloDiff);
 
         if (payout === 0) {
-            lines.push(`${bet.playerName} bet on Team ${bet.team}: draw, nothing won or lost.`);
+            lines.push(`${bet.playerName} bet on ${teamHeading(bet.team, teamNames?.[bet.team])}: draw, nothing won or lost.`);
             continue;
         }
 
@@ -1077,7 +1294,7 @@ async function settleBets(db, game, team1Diff, team2Diff, channelId, isBlind) {
         if (!updated) continue; // spilleren er væk, fx efter /reset-season
 
         settled++;
-        lines.push(`${bet.playerName} bet on Team ${bet.team}: ${payout > 0 ? "+" : ""}${payout} elo -> ${updated[ratingField]}`);
+        lines.push(`${bet.playerName} bet on ${teamHeading(bet.team, teamNames?.[bet.team])}: ${payout > 0 ? "+" : ""}${payout} elo -> ${updated[ratingField]}`);
     }
 
     if (lines.length === 0) return "";
