@@ -326,6 +326,12 @@ async function runCommand(interaction, env, ctx) {
                         formatRngdleLowest(withCurrentNames(worst, rollNames)) ?? "Nobody has rolled yet. Use **/roll** to start."
                     );
                 }
+                if (board === "highest") {
+                    const best = await getRngdleHighestRolls(db, channel_id, banned);
+                    return respondEphemeral(
+                        formatRngdleHighest(withCurrentNames(best, rollNames)) ?? "Nobody has rolled yet. Use **/roll** to start."
+                    );
+                }
                 if (board === "daily") {
                     const { dateKey } = getCopenhagenParts(new Date());
                     const todays = await getRngdleDailyRolls(db, channel_id, banned, dateKey);
@@ -909,7 +915,7 @@ async function runCommand(interaction, env, ctx) {
                     (env.RNGDLE_CHANNEL_ID
                         ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is.\n`
                         : `One roll a day with **/roll** — a random number scored on how interesting it is.\n`) +
-                    `**/roll-ranking** shows the all-time EP standings — pick **board** to see the lowest rolls ever or today's field instead.\n` +
+                    `**/roll-ranking** shows the all-time EP standings — pick **board** to see the highest or lowest rolls ever, or today's field instead.\n` +
                     `**/roll-stats** shows a player's stats — rolls, total EP, wins, best and lowest roll, and biggest badge.`
                 );
 
@@ -1369,6 +1375,19 @@ async function getRollPercentile(db, channelId, ep, bannedIds) {
     };
 }
 
+// De bedste enkeltrul nogensinde — samme princip som ovenfor, bare vendt om.
+// Her rangeres RULLENE, ikke spillerne, og listen er sorteret på EP, ikke tal.
+async function getRngdleHighestRolls(db, channelId, bannedIds) {
+    const match = { channelId };
+    if (bannedIds?.size) match.playerId = { $nin: [...bannedIds] };
+
+    return db.collection(RNGDLE_ROLLS_COLLECTION)
+        .find(match)
+        .sort({ ep: -1, rolledAt: 1 })
+        .limit(RNGDLE_LEADERBOARD_LIMIT)
+        .toArray();
+}
+
 // Dagens felt, bedste rul først. Dagen er ikke afgjort før annonceringen kl. 16,
 // så det her er en mellemstilling — derfor ingen medaljer, kun rækkefølgen.
 async function getRngdleDailyRolls(db, channelId, bannedIds, dateKey) {
@@ -1457,6 +1476,12 @@ function formatRngdleLeaderboard(standings) {
 // et "…and N more" at vise her — listen ER de værste, ikke en afkortning af dem.
 function formatRngdleLowest(rolls) {
     return formatRngdleBoard("🗑️ **All-time lowest rolls** 🗑️", rolls, (r, i) =>
+        `${i + 1}. ${r.name} — 🎲 **${r.number}** ${tierEmoji(r.tier)} **${r.ep.toLocaleString()} EP** (${r.dateKey})`
+    );
+}
+
+function formatRngdleHighest(rolls) {
+    return formatRngdleBoard("👑 **All-time highest rolls** 👑", rolls, (r, i) =>
         `${i + 1}. ${r.name} — 🎲 **${r.number}** ${tierEmoji(r.tier)} **${r.ep.toLocaleString()} EP** (${r.dateKey})`
     );
 }

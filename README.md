@@ -98,12 +98,14 @@ interessant tallet er. Point lægges sammen over tid til en fælles stilling.
 | ------------------------------- | ---------------------------------------------------------------- |
 | `/roll`                         | Rul dagens tal. Ét pr. spiller pr. døgn.                         |
 | `/roll-ranking`                 | Den samlede EP-stilling for alle spillere.                       |
+| `/roll-ranking board:highest`   | De bedste enkeltrul nogensinde.                                  |
 | `/roll-ranking board:lowest`    | De dårligste enkeltrul nogensinde — hall of shame.               |
 | `/roll-ranking board:daily`     | Dagens felt indtil videre, bedste rul først.                     |
 
-`board:lowest` rangerer **rul**, ikke spillere, så den samme spiller kan fylde
-flere pladser. Den er sorteret på EP, ikke på tallets størrelse — små tal som 0,
-7 og 69 scorer skyhøjt og havner aldrig på den liste.
+`board:highest` og `board:lowest` rangerer **rul**, ikke spillere, så den
+samme spiller kan fylde flere pladser. Begge er sorteret på EP, ikke på
+tallets størrelse — små tal som 0, 7 og 69 scorer skyhøjt og havner aldrig på
+`board:lowest`.
 
 Sæt `RNGDLE_CHANNEL_ID` i `wrangler.toml` til ID'et på den kanal, spillet skal
 køre i. De to kommandoer virker **kun** der, og de øvrige kommandoer virker
