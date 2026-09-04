@@ -10,7 +10,10 @@
 //
 //   node test/reply.mjs
 
-import { sendReply, buildRatingUpdate, EPHEMERAL_COMMANDS } from '../src/index.js';
+import {
+    sendReply, buildRatingUpdate, EPHEMERAL_COMMANDS,
+    teamPairKey, normalizeTeamName, teamHeading
+} from '../src/index.js';
 
 const failures = [];
 
@@ -90,10 +93,37 @@ check('uafgjort rykker kun pointene',
     buildRatingUpdate('doubleRanking', 3, 0.5),
     { $inc: { doubleRanking: 3 } });
 
+// --- Holdnavne ---
+
+// Et hold er de to spillere, ikke en rækkefølge. Slog nøglen fejl her, ville
+// makkerparret få ét navn når den ene skrev kommandoen og et andet når den anden
+// gjorde.
+check('makkerparret er det samme uanset rækkefølgen',
+    teamPairKey('222', '111'), teamPairKey('111', '222'));
+
+// Navnet står midt i en offentlig besked. Kan det pinge eller bryde markdown,
+// kan et holdnavn bruges til at rode med alt det botten skriver.
+check('mentions afvises', !!normalizeTeamName('@everyone lol').error, true);
+check('markdown afvises', !!normalizeTeamName('**bold**').error, true);
+check('for kort afvises', !!normalizeTeamName(' a ').error, true);
+check('for langt afvises', !!normalizeTeamName('a'.repeat(41)).error, true);
+check('manglende navn afvises', !!normalizeTeamName(undefined).error, true);
+
+// Linjeskift ville trække holdlinjen fra hinanden i kampbeskeden.
+check('whitespace koges ned til ét mellemrum',
+    normalizeTeamName('  Nordic \n  Chaos '), { name: 'Nordic Chaos', nameKey: 'nordic chaos' });
+
+// Nummeret er det /result og /bet peger på, så det skal stå der uanset om holdet
+// har et navn eller ej.
+check('nummeret bliver stående foran navnet',
+    teamHeading(1, 'Nordic Chaos'), 'Team 1 — Nordic Chaos');
+check('et hold uden navn står med sit nummer alene',
+    teamHeading(2, null), 'Team 2');
+
 if (failures.length) {
     console.error('❌ Svarvejen opfører sig ikke som forventet:');
     for (const f of failures) console.error('   ' + f);
     process.exit(1);
 }
 
-console.log('✅ Svar leveres korrekt, og pointene skrives med $inc');
+console.log('✅ Svar leveres korrekt, pointene skrives med $inc, og holdnavne er sikre at vise');
