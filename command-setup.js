@@ -87,6 +87,22 @@ const ALL_COMMANDS = [
         options: [{ name: "season", description: "Which season to see (e.g. 1)", type: 4, required: true }]
     },
     {
+        name: "set-team-name",
+        description: "Name the team you and your teammate make up in this channel",
+        type: 1,
+        options: [
+            { name: "teammate", description: "Who you play with", type: 6, required: true },
+            { name: "name", description: "The team name — leave empty to clear it", type: 3, required: false }
+        ]
+    },
+    {
+        name: "team-name",
+        description: "See what you and a teammate are called",
+        type: 1,
+        options: [{ name: "teammate", description: "Who you play with", type: 6, required: true }]
+    },
+    { name: "team-list", description: "See every named team in this channel", type: 1 },
+    {
         name: "result",
         description: "Report the match result",
         type: 1,
