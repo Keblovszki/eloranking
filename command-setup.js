@@ -42,6 +42,12 @@ const ALL_COMMANDS = [
         type: 1,
         options: [{ name: "player", description: "Whose stats to see (default: yourself)", type: 6, required: false }]
     },
+    {
+        name: "roll-history",
+        description: "RNGdle: see a player's roll history",
+        type: 1,
+        options: [{ name: "player", description: "Whose history to see (default: yourself)", type: 6, required: false }]
+    },
     { name: "single-ranking", description: "See the single ranking", type: 1 },
     { name: "double-ranking", description: "See the double ranking", type: 1 },
     { name: "play-single", description: "Challenge someone to a single match", type: 1 },

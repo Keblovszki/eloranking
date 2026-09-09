@@ -12,7 +12,8 @@
 
 import {
     sendReply, buildRatingUpdate, EPHEMERAL_COMMANDS,
-    teamPairKey, normalizeTeamName, teamHeading
+    teamPairKey, normalizeTeamName, teamHeading,
+    makePercentileLookup, formatPercentileShort, formatRngdleHistory
 } from '../src/index.js';
 
 const failures = [];
@@ -120,10 +121,83 @@ check('nummeret bliver stående foran navnet',
 check('et hold uden navn står med sit nummer alene',
     teamHeading(2, null), 'Team 2');
 
+// --- RNGdle-historik ---
+
+// Percentilen i historikken regnes lokalt ud af kanalens EP-fordeling i stedet
+// for med tre tællinger pr. rul. Regnestykket SKAL være det samme som
+// getRollPercentile laver i databasen: begge sider tælles ærligt hver for sig,
+// og rullet tæller sig selv med. Fire rul med EP 0, 10, 10 og 100.
+{
+    const at = makePercentileLookup([
+        { _id: 0, count: 1 }, { _id: 10, count: 2 }, { _id: 100, count: 1 }
+    ]);
+
+    check('det bedste rul er top 25% (1 af 4 er mindst så højt)',
+        at(100), { topPercent: 25, bottomPercent: 100, total: 4 });
+    check('det dårligste rul er bund 25%',
+        at(0), { topPercent: 100, bottomPercent: 25, total: 4 });
+    // Delte pladser tæller med på BEGGE sider: begge tiere er "mindst så høje"
+    // som hinanden og "mindst så lave" som hinanden.
+    check('delt EP tæller med på begge sider',
+        at(10), { topPercent: 75, bottomPercent: 75, total: 4 });
+}
+
+// Uden rul i kanalen er der ingen percentil at vise — og ingen division med nul.
+check('tom fordeling giver ingen percentil', makePercentileLookup([])(0), null);
+
+// Samme valg af side som den store percentillinje på /roll: vis den side rullet
+// hører til, så et bundrul ikke står som "top 88%".
+check('høj percentil vises som top', formatPercentileShort({ topPercent: 3, bottomPercent: 98 }), 'top 3.0%');
+check('lav percentil vises som bund', formatPercentileShort({ topPercent: 98, bottomPercent: 3 }), 'bottom 3.0%');
+check('uafgjort falder ud til top', formatPercentileShort({ topPercent: 50, bottomPercent: 50 }), 'top 50%');
+check('manglende percentil giver ingen tekst', formatPercentileShort(null), null);
+
+function historyRoll(dateKey, number, ep, tier, percentile) {
+    return { dateKey, number, ep, tier, percentile };
+}
+
+// Nyeste rul først, og hver linje bærer sin egen percentil.
+{
+    const text = formatRngdleHistory({
+        name: 'Hannibal',
+        totalEp: 30000,
+        rolls: [
+            historyRoll('2025-09-08', 777777, 25000, 'epic', { topPercent: 2, bottomPercent: 99 }),
+            historyRoll('2025-09-07', 481902, 5000, 'trash', { topPercent: 97, bottomPercent: 4 })
+        ]
+    });
+
+    // Tusindtalsseparatoren følger maskinens locale, ligesom resten af botten,
+    // så forventningen formateres på samme måde i stedet for at være hardcodet.
+    const ep = n => n.toLocaleString();
+    check('historikken har overskrift, opsummering, streg og én linje pr. rul',
+        text.split('\n'), [
+            '📜 **RNGdle history — Hannibal** 📜',
+            `🎲 2 rolls · 💰 **${ep(30000)} EP** · ⌀ ${ep(15000)} EP per roll`,
+            '--------------------------------------',
+            `2025-09-08 — 🎲 **777777** 🟣 **${ep(25000)} EP** (top 2.0%)`,
+            `2025-09-07 — 🎲 **481902** 🗑️ **${ep(5000)} EP** (bottom 4.0%)`
+        ]);
+}
+
+// En Discord-besked kan højst rumme 2000 tegn, så en lang historik skæres af i
+// stedet for at få hele svaret afvist.
+{
+    const many = Array.from({ length: 20 }, (_, i) =>
+        historyRoll(`2025-09-${String(i + 1).padStart(2, '0')}`, i, 100, 'common', null));
+    const lines = formatRngdleHistory({ name: 'Hannibal', totalEp: 2000, rolls: many }).split('\n');
+
+    // 2 linjer overskrift + 1 streg + 15 rul + 1 afkortningslinje.
+    check('lang historik skæres af', lines.length, 19);
+    check('afkortningen siger hvor mange der mangler', lines.at(-1), '…and 5 more');
+}
+
+check('/roll-history står som altid-ephemeral', EPHEMERAL_COMMANDS.has('roll-history'), true);
+
 if (failures.length) {
     console.error('❌ Svarvejen opfører sig ikke som forventet:');
     for (const f of failures) console.error('   ' + f);
     process.exit(1);
 }
 
-console.log('✅ Svar leveres korrekt, pointene skrives med $inc, og holdnavne er sikre at vise');
+console.log('✅ Svar leveres korrekt, pointene skrives med $inc, holdnavne er sikre at vise, og historikkens percentiler passer');
