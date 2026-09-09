@@ -15,7 +15,7 @@ const TEAMS_COLLECTION = "Teams";
 // starter forfra her.
 const RNGDLE_ROLLS_COLLECTION = "RngdleRolls";
 // Kommandoer der hører til spillet frem for Elo-ranglisten.
-const RNGDLE_COMMANDS = new Set(["roll", "roll-ranking", "roll-stats"]);
+const RNGDLE_COMMANDS = new Set(["roll", "roll-ranking", "roll-stats", "roll-history"]);
 const HANNIBAL_ID = "253543574342205440";
 const K = 32;
 // En tilskuer får 20% af det holdet han satsede på vandt eller tabte — dog
@@ -145,7 +145,7 @@ export default {
 // kvitterer, for en besked kan ikke skifte synlighed bagefter. /roll står ikke
 // på listen: den er offentlig i det almindelige tilfælde, og sendReply klarer
 // det ephemerale "du har allerede rullet i dag".
-export const EPHEMERAL_COMMANDS = new Set(["roll-ranking", "roll-stats", "bet", "team-name", "team-list"]);
+export const EPHEMERAL_COMMANDS = new Set(["roll-ranking", "roll-stats", "roll-history", "bet", "team-name", "team-list"]);
 
 async function replyToCommand(interaction, env, ctx) {
     // Én linje pr. kommando, også når alt gik godt. "Applikationen svarede ikke"
@@ -361,6 +361,21 @@ async function runCommand(interaction, env, ctx) {
                 const statsNames = await fetchGuildDisplayNames(env, guild_id);
                 return respondEphemeral(formatRngdlePlayerStats({
                     ...stats, name: currentName(statsNames, targetId, stats.name)
+                }));
+            }
+
+            case "roll-history": {
+                const banned = getBannedRngdleIds(env);
+                const targetId = options?.find(o => o.name === "player")?.value ?? id;
+                const history = await getRngdlePlayerHistory(db, channel_id, targetId, banned);
+                if (!history) {
+                    return respondEphemeral(targetId === id
+                        ? "You haven't rolled yet. Use **/roll** to start."
+                        : "That player hasn't rolled yet.");
+                }
+                const historyNames = await fetchGuildDisplayNames(env, guild_id);
+                return respondEphemeral(formatRngdleHistory({
+                    ...history, name: currentName(historyNames, targetId, history.name)
                 }));
             }
 
@@ -1042,7 +1057,8 @@ async function runCommand(interaction, env, ctx) {
                         ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is.\n`
                         : `One roll a day with **/roll** — a random number scored on how interesting it is.\n`) +
                     `**/roll-ranking** shows the all-time EP standings — pick **board** to see the highest or lowest rolls ever, or today's field instead.\n` +
-                    `**/roll-stats** shows a player's stats — rolls, total EP, wins, best and lowest roll, and biggest badge.`
+                    `**/roll-stats** shows a player's stats — rolls, total EP, wins, best and lowest roll, and biggest badge.\n` +
+                    `**/roll-history** lists a player's rolls newest first, each with how it ranks against every roll ever.`
                 );
 
             default:
@@ -1474,6 +1490,16 @@ function formatPercentile(percentile) {
         : `📊 Bottom ${formatPercentSide(percentile.bottomPercent)}% of all rolls`;
 }
 
+// Samme valg af side som formatPercentile, bare uden pynt: i historikken står
+// percentilen sidst på en linje der i forvejen rummer dato, tal, tier og EP, og
+// "📊 Top 3% of all rolls" pr. linje ville sprænge beskeden.
+export function formatPercentileShort(percentile) {
+    if (!percentile) return null;
+    return percentile.topPercent <= percentile.bottomPercent
+        ? `top ${formatPercentSide(percentile.topPercent)}%`
+        : `bottom ${formatPercentSide(percentile.bottomPercent)}%`;
+}
+
 function formatRoll(scored, percentile) {
     const lines = [
         `🎲 **${scored.number}**`,
@@ -1592,6 +1618,53 @@ async function getRollPercentile(db, channelId, ep, bannedIds) {
     };
 }
 
+// Hele kanalens EP-fordeling som (ep, antal) sorteret stigende. Historikken skal
+// percentilere hvert eneste rul på listen, og getRollPercentile koster tre
+// tællinger pr. opslag — 15 linjer ville blive til 45 databasekald. Fordelingen
+// er ét kald, og percentilerne regnes derefter lokalt. Bandlyste holdes ude,
+// præcis som i getRollPercentile, så de to tal siger det samme.
+async function getRngdleEpDistribution(db, channelId, bannedIds) {
+    const match = { channelId };
+    if (bannedIds?.size) match.playerId = { $nin: [...bannedIds] };
+
+    return db.collection(RNGDLE_ROLLS_COLLECTION).aggregate([
+        { $match: match },
+        { $group: { _id: "$ep", count: { $sum: 1 } } },
+        { $sort: { _id: 1 } }
+    ]).toArray();
+}
+
+// Laver et percentilopslag ud af fordelingen. Returnerer den samme form som
+// getRollPercentile — begge sider tælles ærligt hver for sig, og et rul tæller
+// sig selv med — så formateringen kan bruges uændret på begge.
+export function makePercentileLookup(distribution) {
+    const eps = distribution.map(d => d._id);
+    // cumulative[i] = antal rul med ep <= eps[i].
+    const cumulative = [];
+    let running = 0;
+    for (const d of distribution) cumulative.push(running += d.count);
+    const total = running;
+
+    if (!total) return () => null;
+
+    return ep => {
+        // Første indeks hvor eps[i] >= ep. Fordelingen er sorteret, så en
+        // binærsøgning holder opslaget billigt uanset hvor mange rul kanalen har.
+        let lo = 0, hi = eps.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (eps[mid] < ep) lo = mid + 1; else hi = mid;
+        }
+        const below = lo > 0 ? cumulative[lo - 1] : 0;
+        const atOrBelow = eps[lo] === ep ? cumulative[lo] : below;
+        return {
+            topPercent: ((total - below) / total) * 100,
+            bottomPercent: (atOrBelow / total) * 100,
+            total
+        };
+    };
+}
+
 // De bedste enkeltrul nogensinde — samme princip som ovenfor, bare vendt om.
 // Her rangeres RULLENE, ikke spillerne, og listen er sorteret på EP, ikke tal.
 async function getRngdleHighestRolls(db, channelId, bannedIds) {
@@ -1664,6 +1737,31 @@ async function getRngdlePlayerStats(db, channelId, playerId, bannedIds) {
     };
 }
 
+// En spillers rul i omvendt kronologisk orden, hvert med sin percentil mod alle
+// rul i kanalen. Nyeste først, for det er dem man spørger til — de ældste er
+// allerede afgjort, og de bedste og værste står i /roll-stats. Percentilen
+// regnes ud fra fordelingen, så hele historikken koster to opslag i alt.
+// Bandlyste behandles som havde de ikke rullet, helt som i /roll-stats.
+async function getRngdlePlayerHistory(db, channelId, playerId, bannedIds) {
+    if (bannedIds?.has(playerId)) return null;
+    const col = db.collection(RNGDLE_ROLLS_COLLECTION);
+
+    // Ét rul pr. dag pr. spiller, så listen er højst så lang som antallet af dage
+    // der er spillet — den kan trygt hentes hel og skæres af i formateringen.
+    const [rolls, distribution] = await Promise.all([
+        col.find({ channelId, playerId }).sort({ rolledAt: -1 }).toArray(),
+        getRngdleEpDistribution(db, channelId, bannedIds)
+    ]);
+    if (!rolls.length) return null;
+
+    const percentileOf = makePercentileLookup(distribution);
+    return {
+        name: rolls[0].name,
+        totalEp: rolls.reduce((sum, r) => sum + r.ep, 0),
+        rolls: rolls.map(r => ({ ...r, percentile: percentileOf(r.ep) }))
+    };
+}
+
 // Fælles ramme om de tre stillinger: overskrift, streg og loftet på antal linjer.
 function formatRngdleBoard(title, entries, line) {
     if (!entries.length) return null;
@@ -1727,6 +1825,24 @@ function formatRngdlePlayerStats(s) {
         );
     }
     return lines.join('\n');
+}
+
+// Historikken deler ramme med stillingerne, så den også får overskrift, streg og
+// det samme loft på antal linjer — en Discord-besked kan ikke rumme mere. Er der
+// flere rul end der er plads til, skriver rammen selv "…and N more".
+export function formatRngdleHistory(h) {
+    const count = h.rolls.length;
+    const average = Math.round(h.totalEp / count);
+    const summary =
+        `🎲 ${count} ${count === 1 ? 'roll' : 'rolls'} · ` +
+        `💰 **${h.totalEp.toLocaleString()} EP** · ` +
+        `⌀ ${average.toLocaleString()} EP per roll`;
+
+    return formatRngdleBoard(`📜 **RNGdle history — ${h.name}** 📜\n${summary}`, h.rolls, r => {
+        const percentile = formatPercentileShort(r.percentile);
+        return `${r.dateKey} — 🎲 **${r.number}** ${tierEmoji(r.tier)} **${r.ep.toLocaleString()} EP**` +
+            (percentile ? ` (${percentile})` : '');
+    });
 }
 
 function formatStatRoll(label, r) {

@@ -147,14 +147,25 @@ interessant tallet er. Point lægges sammen over tid til en fælles stilling.
 | `/roll-ranking board:highest`   | De bedste enkeltrul nogensinde.                                  |
 | `/roll-ranking board:lowest`    | De dårligste enkeltrul nogensinde — hall of shame.               |
 | `/roll-ranking board:daily`     | Dagens felt indtil videre, bedste rul først.                     |
+| `/roll-stats`                   | En spillers samlede tal. Uden `player` er det dine egne.         |
+| `/roll-history`                 | En spillers rul ét for ét, nyeste først, med percentil.          |
 
 `board:highest` og `board:lowest` rangerer **rul**, ikke spillere, så den
 samme spiller kan fylde flere pladser. Begge er sorteret på EP, ikke på
 tallets størrelse — små tal som 0, 7 og 69 scorer skyhøjt og havner aldrig på
 `board:lowest`.
 
+`/roll-history` viser hele forløbet i stedet for kun toppen og bunden: hver
+linje er ét rul med dato, tal, tier, EP og hvor rullet ligger i forhold til
+**alle** rul i kanalen — `top 3.0%` for et godt rul, `bottom 12%` for et
+dårligt. Percentilen regnes præcis som den på `/roll`: begge sider tælles hver
+for sig, rullet tæller sig selv med, og den side rullet hører til er den der
+vises. Svaret er ephemeral, ligesom `/roll-stats`, så en historik ikke fylder
+kanalen. Listen skæres af ved 15 rul, for en Discord-besked kan højst rumme
+2000 tegn.
+
 Sæt `RNGDLE_CHANNEL_ID` i `wrangler.toml` til ID'et på den kanal, spillet skal
-køre i. De to kommandoer virker **kun** der, og de øvrige kommandoer virker
+køre i. RNGdle-kommandoerne virker **kun** der, og de øvrige kommandoer virker
 **alle andre steder end** der — Elo-ranglisten scopes på kanal, så de to ting
 skal holdes adskilt. Hver dag kl. 16:00 (København) annoncerer botten dagens
 bedste rul og den samlede stilling. Det kræver `DISCORD_BOT_TOKEN` som secret.
@@ -217,7 +228,8 @@ RNGDLE_BANNED_IDS = "123456789012345678,987654321098765432"
 
 En bandlyst bruger:
 
-- får afvist både `/roll` og `/roll-ranking`
+- får afvist alle RNGdle-kommandoerne (`/roll`, `/roll-ranking`, `/roll-stats`, `/roll-history`)
+- kan ikke slås op af andre: `/roll-stats` og `/roll-history` svarer som var der ingen rul
 - tælles ikke med i dagens resultat — hverken som vinder eller i deltagerlisten
 - filtreres ud af den samlede stilling
 - får nægtet **Send Messages** i RNGdle-kanalen af botten
