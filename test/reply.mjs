@@ -14,7 +14,7 @@ import {
     sendReply, buildRatingUpdate, EPHEMERAL_COMMANDS,
     teamPairKey, normalizeTeamName, teamHeading,
     makePercentileLookup, formatPercentileShort, formatRngdleHistory,
-    recordsForDay, formatRngdleDayResult
+    recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement
 } from '../src/index.js';
 
 const failures = [];
@@ -282,6 +282,51 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     ]);
     check('præcis ved loftet er der ingen halelinje',
         formatRngdleDayResult(todays, () => null, many.slice(0, 5))[1].split('\n').length, 5);
+}
+
+// Per-sektions-lofterne garanterer ikke noget, for sektionerne kender ikke
+// hinandens størrelse. Den samlede besked måles derfor til sidst, og stillingen
+// skæres nedefra indtil den passer. Værste realistiske dag: 20 deltagere med lange
+// navne, fem rekorder, sæsonsummer på syv cifre og en fyldt stilling.
+{
+    const length = s => [...s].length;
+    const id = i => `${100000000000000000n + BigInt(i)}`;
+    const ids = Array.from({ length: 20 }, (_, i) => id(i));
+    const todays = ids.map((pid, i) => dayRoll(pid, 1000000 + i, 30000 - i * 100, 'anomaly', i));
+    const at = () => ({ topPercent: 0.5, bottomPercent: 99.5 });
+    const records = ids.slice(0, 6).map((pid, i) =>
+        ({ roll: todays[i], record: { scope: i === 0 ? 'global' : 'personal', kind: 'high' } }));
+    const standings = ids.map((pid, i) => ({
+        _id: pid, name: `Spillernavn-nummer-${String(i).padStart(4, '0')}`,
+        totalEp: 2500000 - i * 1000, days: 120, wins: 20 - i, best: 1250000
+    }));
+    const sections = [
+        `🎲 **RNGdle Result of the Day** 🎲`,
+        ...formatRngdleDayResult(todays, at, records),
+        `Participants today: ${ids.map(pid => `<@${pid}>`).join(' ')}`
+    ];
+    check('podie, rekorder og deltagere fylder alene mere end der er plads til med fuld stilling',
+        length([...sections, ''].join('\n\n')) > 2000 - 15 * 60, true);
+
+    const content = fitRngdleAnnouncement(sections, standings);
+    const board = content.split('\n\n').at(-1).split('\n');
+    check('den samlede besked holder sig under Discords grænse', length(content) <= 2000, true);
+    check('stillingen er stadig med, skåret nedefra', board[0], '🏅 **All-time RNGdle leaderboard** 🏅');
+    check('den bedste står øverst', board[2].startsWith('🥇Spillernavn-nummer-0000'), true);
+    check('halelinjen tæller de skårne', board.at(-1), `…and ${20 - (board.length - 3)} more`);
+    check('der blev rent faktisk skåret', board.length - 3 < 15, true);
+    check('én række mere ville ikke have passet',
+        length(fitRngdleAnnouncement(sections, standings, 100000).split('\n\n').at(-1)) > length(content.split('\n\n').at(-1)), true);
+
+    // Er der plads, vises stillingen som altid — loftet på 15 og en halelinje.
+    const roomy = fitRngdleAnnouncement(sections.slice(0, 2), standings);
+    check('med plads nok skæres intet ud over det faste loft',
+        roomy.split('\n\n').at(-1).split('\n').length, 2 + 15 + 1);
+
+    // Kan ikke én række få plads, udgår stillingen, og sektionerne falder bagfra.
+    const tight = fitRngdleAnnouncement(sections, standings, length(sections.slice(0, 2).join('\n\n')) + 5);
+    check('uden plads til stillingen står podiet tilbage', tight, sections.slice(0, 2).join('\n\n'));
+    check('uden stilling falder vi tilbage til sektionerne', fitRngdleAnnouncement(sections, [], 100000), sections.join('\n\n'));
 }
 
 if (failures.length) {

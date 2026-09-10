@@ -1520,10 +1520,18 @@ export function recordsForDay(todays, before) {
 // En Discord-besked kan højst være 2000 tegn, så både badge-listen, stillingen og
 // dagens rekorder skæres af frem for at risikere at hele beskeden bliver afvist.
 // Rekordloftet er lavt, fordi rekorderne deler besked med podiet, deltagerlisten
-// og stillingen, der tilsammen allerede kan fylde ~1750 tegn.
+// og stillingen. Lofterne alene garanterer ikke noget, da sektionerne ikke kender
+// hinandens størrelse — dagsannonceringen måles derfor til sidst som helhed i
+// fitRngdleAnnouncement.
+const DISCORD_MESSAGE_LIMIT = 2000;
 const RNGDLE_BADGE_LIMIT = 12;
 const RNGDLE_LEADERBOARD_LIMIT = 15;
 const RNGDLE_DAILY_RECORD_LIMIT = 5;
+
+// Discord tæller tegn som kodepunkter, så en emoji er ét tegn og ikke to.
+function messageLength(content) {
+    return [...content].length;
+}
 
 // Én percentilside pænt formateret. Vi viser kun få decimaler, så "0,003 %" ikke
 // drukner i støj: store tal rundes til hele, ellers holder vi to betydende cifre.
@@ -1857,10 +1865,10 @@ async function getRngdlePlayerHistory(db, channelId, playerId, bannedIds) {
 }
 
 // Fælles ramme om de tre stillinger: overskrift, streg og loftet på antal linjer.
-function formatRngdleBoard(title, entries, line) {
+function formatRngdleBoard(title, entries, line, limit = RNGDLE_LEADERBOARD_LIMIT) {
     if (!entries.length) return null;
 
-    const shown = entries.slice(0, RNGDLE_LEADERBOARD_LIMIT);
+    const shown = entries.slice(0, limit);
     const lines = shown.map(line);
     if (entries.length > shown.length) lines.push(`…and ${entries.length - shown.length} more`);
 
@@ -1873,12 +1881,33 @@ function rankPrefix(i) {
     return i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}. `;
 }
 
-function formatRngdleLeaderboard(standings) {
+function formatRngdleLeaderboard(standings, limit = RNGDLE_LEADERBOARD_LIMIT) {
     return formatRngdleBoard("🏅 **All-time RNGdle leaderboard** 🏅", standings, (t, i) => {
         const days = `${t.days} ${t.days === 1 ? 'day' : 'days'}`;
         const wins = `${t.wins} ${t.wins === 1 ? 'win' : 'wins'}`;
         return `${rankPrefix(i)}${t.name} — **${t.totalEp.toLocaleString()} EP** (${days}, ${wins}, best ${t.best.toLocaleString()})`;
-    });
+    }, limit);
+}
+
+// Samler dagsannonceringen så den med sikkerhed holder sig under Discords grænse.
+// Stillingen er det der fylder, og bunden af den er det mindst interessante, så
+// den skæres først: én række ad gangen nedefra, indtil beskeden passer — hale-
+// linjen fortæller hvor mange der blev skåret. Er der ikke plads til én eneste
+// række, udgår stillingen, og derefter falder sektionerne bagfra (deltagerliste,
+// rekorder), så podiet er det sidste der står tilbage.
+export function fitRngdleAnnouncement(sections, standings, limit = DISCORD_MESSAGE_LIMIT) {
+    const fits = content => messageLength(content) <= limit;
+
+    for (let shown = Math.min(RNGDLE_LEADERBOARD_LIMIT, standings.length); shown >= 1; shown--) {
+        const content = [...sections, formatRngdleLeaderboard(standings, shown)].join('\n\n');
+        if (fits(content)) return content;
+    }
+
+    for (let kept = sections.length; kept >= 1; kept--) {
+        const content = sections.slice(0, kept).join('\n\n');
+        if (fits(content)) return content;
+    }
+    return sections[0];
 }
 
 // Forespørgslen henter allerede kun RNGDLE_LEADERBOARD_LIMIT rul, så der er aldrig
@@ -1953,7 +1982,7 @@ async function announceRngdleWinner(env) {
 
     const banned = getBannedRngdleIds(env);
     const client = new MongoClient(env.MONGODB_URI, MONGO_TIMEOUTS);
-    let sections;
+    let sections, standings;
     try {
         await client.connect();
         const db = client.db(DB_ELO_NAME);
@@ -1978,10 +2007,7 @@ async function announceRngdleWinner(env) {
         // Cron'en har ingen interaktion at læse guild-id'et af, så det slås op på
         // kanalen. Mislykkes det, får stillingen bare de gemte navne.
         const names = await fetchGuildDisplayNames(env, await fetchChannelGuildId(env, env.RNGDLE_CHANNEL_ID));
-        const standings = withCurrentNames(await getRngdleStandings(db, env.RNGDLE_CHANNEL_ID, banned), names, e => e._id);
-
-        const leaderboard = formatRngdleLeaderboard(standings);
-        if (leaderboard) sections.push(leaderboard);
+        standings = withCurrentNames(await getRngdleStandings(db, env.RNGDLE_CHANNEL_ID, banned), names, e => e._id);
     } finally {
         await client.close();
     }
@@ -1990,7 +2016,7 @@ async function announceRngdleWinner(env) {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` },
         body: JSON.stringify({
-            content: sections.join('\n\n'),
+            content: fitRngdleAnnouncement(sections, standings),
             // Stillingen viser brugernes egne visningsnavne. "users" lader
             // deltager-mentions pinge, men et navn der indeholder @everyone
             // eller en rolle kan ikke udløse et ping.
