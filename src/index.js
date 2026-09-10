@@ -1889,21 +1889,44 @@ function formatRngdleLeaderboard(standings, limit = RNGDLE_LEADERBOARD_LIMIT) {
     }, limit);
 }
 
+// Deltagerlisten pinger dagens spillere. Skæres den, tælles resten i halen.
+function formatRngdleParticipants(playerIds, shown = playerIds.length) {
+    if (!shown) return null;
+    const rest = playerIds.length - shown;
+    return `Participants today: ${playerIds.slice(0, shown).map(id => `<@${id}>`).join(' ')}` +
+        (rest > 0 ? ` …and ${rest} more` : '');
+}
+
+// Så mange rækker af stillingen vil vi helst beholde, før vi begynder at skære i
+// deltagerlisten i stedet.
+const RNGDLE_LEADERBOARD_FLOOR = 3;
+
 // Samler dagsannonceringen så den med sikkerhed holder sig under Discords grænse.
 // Stillingen er det der fylder, og bunden af den er det mindst interessante, så
-// den skæres først: én række ad gangen nedefra, indtil beskeden passer — hale-
-// linjen fortæller hvor mange der blev skåret. Er der ikke plads til én eneste
-// række, udgår stillingen, og derefter falder sektionerne bagfra (deltagerliste,
-// rekorder), så podiet er det sidste der står tilbage.
-export function fitRngdleAnnouncement(sections, standings, limit = DISCORD_MESSAGE_LIMIT) {
+// den skæres først: én række ad gangen nedefra, ned til de tre bedste. Rækker det
+// ikke, skæres deltagerlisten bagfra (én mention er 21 tegn, så hundrede
+// deltagere kan aldrig få plads), så resten af stillingen, og til sidst falder
+// sektionerne bagfra, så podiet er det sidste der står tilbage. Halelinjer
+// fortæller hvor mange der blev skåret.
+export function fitRngdleAnnouncement(sections, participants, standings, limit = DISCORD_MESSAGE_LIMIT) {
     const fits = content => messageLength(content) <= limit;
+    const build = (players, rows) =>
+        [...sections, formatRngdleParticipants(participants, players), rows ? formatRngdleLeaderboard(standings, rows) : null]
+            .filter(Boolean).join('\n\n');
 
-    for (let shown = Math.min(RNGDLE_LEADERBOARD_LIMIT, standings.length); shown >= 1; shown--) {
-        const content = [...sections, formatRngdleLeaderboard(standings, shown)].join('\n\n');
+    const maxRows = Math.min(RNGDLE_LEADERBOARD_LIMIT, standings.length);
+    const floor = Math.min(RNGDLE_LEADERBOARD_FLOOR, maxRows);
+    const attempts = [];
+    for (let rows = maxRows; rows >= floor; rows--) attempts.push([participants.length, rows]);
+    for (let players = participants.length - 1; players >= 1; players--) attempts.push([players, floor]);
+    for (let rows = floor - 1; rows >= 0; rows--) attempts.push([Math.min(1, participants.length), rows]);
+    attempts.push([0, 0]);
+
+    for (const [players, rows] of attempts) {
+        const content = build(players, rows);
         if (fits(content)) return content;
     }
-
-    for (let kept = sections.length; kept >= 1; kept--) {
+    for (let kept = sections.length - 1; kept >= 1; kept--) {
         const content = sections.slice(0, kept).join('\n\n');
         if (fits(content)) return content;
     }
@@ -1982,7 +2005,7 @@ async function announceRngdleWinner(env) {
 
     const banned = getBannedRngdleIds(env);
     const client = new MongoClient(env.MONGODB_URI, MONGO_TIMEOUTS);
-    let sections, standings;
+    let sections, participants, standings;
     try {
         await client.connect();
         const db = client.db(DB_ELO_NAME);
@@ -1996,12 +2019,11 @@ async function announceRngdleWinner(env) {
             getRngdleEpDistribution(db, env.RNGDLE_CHANNEL_ID, banned),
             getRngdleRecordsBefore(db, env.RNGDLE_CHANNEL_ID, banned, parts.dateKey)
         ]);
-        const participants = todays.map(r => `<@${r.playerId}>`).join(' ');
+        participants = todays.map(r => r.playerId);
 
         sections = [
             `🎲 **RNGdle Result of the Day** 🎲`,
-            ...formatRngdleDayResult(todays, makePercentileLookup(distribution), recordsForDay(todays, before)),
-            `Participants today: ${participants}`
+            ...formatRngdleDayResult(todays, makePercentileLookup(distribution), recordsForDay(todays, before))
         ];
 
         // Cron'en har ingen interaktion at læse guild-id'et af, så det slås op på
@@ -2016,7 +2038,7 @@ async function announceRngdleWinner(env) {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` },
         body: JSON.stringify({
-            content: fitRngdleAnnouncement(sections, standings),
+            content: fitRngdleAnnouncement(sections, participants, standings),
             // Stillingen viser brugernes egne visningsnavne. "users" lader
             // deltager-mentions pinge, men et navn der indeholder @everyone
             // eller en rolle kan ikke udløse et ping.
