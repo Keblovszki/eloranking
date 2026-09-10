@@ -13,7 +13,8 @@
 import {
     sendReply, buildRatingUpdate, EPHEMERAL_COMMANDS,
     teamPairKey, normalizeTeamName, teamHeading,
-    makePercentileLookup, formatPercentileShort, formatRngdleHistory
+    makePercentileLookup, formatPercentileShort, formatRngdleHistory,
+    recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement
 } from '../src/index.js';
 
 const failures = [];
@@ -194,10 +195,144 @@ function historyRoll(dateKey, number, ep, tier, percentile) {
 
 check('/roll-history står som altid-ephemeral', EPHEMERAL_COMMANDS.has('roll-history'), true);
 
+// --- RNGdle-dagsresultat ---
+
+function dayRoll(playerId, number, ep, tier, minute) {
+    return { playerId, number, ep, tier, rolledAt: new Date(Date.UTC(2025, 8, 9, 10, minute)) };
+}
+
+// Rekorderne skal falde ud som ved selve rullet: hvert rul måles mod alt der lå
+// før det. Kanalens rekord før dagen er 20.000/500; Anna har 8.000/2.000, Bo
+// 3.000/1.000, Carl har aldrig rullet.
+{
+    const before = {
+        globalMax: 20000, globalMin: 500,
+        personal: new Map([
+            ['anna', { max: 8000, min: 2000 }],
+            ['bo', { max: 3000, min: 1000 }]
+        ])
+    };
+    const todays = [
+        dayRoll('bo', 111, 25000, 'anomaly', 30),   // slår kanalens rekord, men efter Anna
+        dayRoll('anna', 222, 21000, 'epic', 10),      // slår kanalens rekord først
+        dayRoll('carl', 333, 600, 'trash', 20),       // første rul nogensinde -> ingen rekord
+        dayRoll('dan', 444, 4000, 'rare', 40)
+    ];
+    const records = recordsForDay(todays, before).map(r => `${r.roll.playerId}:${r.record.scope}:${r.record.kind}`);
+    check('dagens rekorder tælles i rullerækkefølge og den globale rekord løber med',
+        records, ['anna:global:high', 'bo:global:high']);
+
+    // Rammer rullet under den løbende rekord, er det højst en personlig rekord.
+    const later = recordsForDay([dayRoll('anna', 222, 21000, 'epic', 10), dayRoll('bo', 111, 20500, 'epic', 30)], before)
+        .map(r => `${r.roll.playerId}:${r.record.scope}:${r.record.kind}`);
+    check('et rul der slår den gamle men ikke dagens rekord er kun personlig',
+        later, ['anna:global:high', 'bo:personal:high']);
+
+    check('en tangering er ikke en rekord',
+        recordsForDay([dayRoll('anna', 1, 8000, 'rare', 1), dayRoll('bo', 2, 1000, 'common', 2)], before), []);
+    check('personlig bund fanges', recordsForDay([dayRoll('bo', 2, 900, 'common', 2)], before)
+        .map(r => `${r.record.scope}:${r.record.kind}`), ['personal:low']);
+}
+
+// Uden rul før dagen er intet en rekord — det allerførste felt er trivielt både
+// højest og lavest.
+check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna', 1, 5, 'trash', 1)], null), []);
+
+// Podiet viser kun de tre bedste med percentil, og rekorderne står som egen sektion.
+{
+    const todays = [
+        dayRoll('dan', 444, 4000, 'rare', 40),
+        dayRoll('anna', 222, 21000, 'epic', 10),
+        dayRoll('carl', 333, 100, 'trash', 20),
+        dayRoll('bo', 111, 25000, 'anomaly', 30)
+    ];
+    const at = ep => ({ topPercent: ep >= 21000 ? 2 : 60, bottomPercent: ep >= 21000 ? 99 : 41 });
+    const records = [{ roll: todays[3], record: { scope: 'global', kind: 'high' } }];
+    const sections = formatRngdleDayResult(todays, at, records);
+    const ep = n => n.toLocaleString();
+
+    check('podiet er de tre bedste, bedst først, med percentil', sections[0].split('\n'), [
+        '🏆 **Top rolls today**',
+        `🥇 <@bo> — 🎲 **111** 🟠 **${ep(25000)} EP** (top 2.0% of all rolls)`,
+        `🥈 <@anna> — 🎲 **222** 🟣 **${ep(21000)} EP** (top 2.0% of all rolls)`,
+        `🥉 <@dan> — 🎲 **444** 🔵 **${ep(4000)} EP** (bottom 41% of all rolls)`
+    ]);
+    check('rekorderne står som egen sektion', sections[1],
+        '<@bo> 👑 set a **NEW ALL-TIME HIGH** — nobody here has ever rolled better!');
+    check('uden rekorder er der kun podiet', formatRngdleDayResult(todays, () => null, []).length, 1);
+    check('uden percentil står linjen uden parentes',
+        formatRngdleDayResult([todays[2]], () => null, [])[0].split('\n')[1], '🥇 <@carl> — 🎲 **333** 🗑️ **100 EP**');
+
+    // Rekordlisten er ikke bundet af podiets tre, så den skal have et loft — ellers
+    // kan en dag med mange personlige rekorder vælte hele beskeden over 2000 tegn.
+    // Globale rekorder skal med før de personlige, og resten tælles i halelinjen.
+    const many = [
+        ...['p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map((id, i) =>
+            ({ roll: dayRoll(id, i, 1000 + i, 'rare', i), record: { scope: 'personal', kind: 'high' } })),
+        { roll: dayRoll('g1', 7, 30000, 'anomaly', 7), record: { scope: 'global', kind: 'high' } }
+    ];
+    const capped = formatRngdleDayResult(todays, () => null, many)[1].split('\n');
+    check('rekordsektionen skæres af med global rekord først og en halelinje', capped, [
+        '<@g1> 👑 set a **NEW ALL-TIME HIGH** — nobody here has ever rolled better!',
+        '<@p1> 🎉 set a **new personal record** — their best roll ever!',
+        '<@p2> 🎉 set a **new personal record** — their best roll ever!',
+        '<@p3> 🎉 set a **new personal record** — their best roll ever!',
+        '<@p4> 🎉 set a **new personal record** — their best roll ever!',
+        '…and 2 more records'
+    ]);
+    check('præcis ved loftet er der ingen halelinje',
+        formatRngdleDayResult(todays, () => null, many.slice(0, 5))[1].split('\n').length, 5);
+}
+
+// Per-sektions-lofterne garanterer ikke noget, for sektionerne kender ikke
+// hinandens størrelse. Den samlede besked måles derfor til sidst, og stillingen
+// skæres nedefra indtil den passer. Værste realistiske dag: 20 deltagere med lange
+// navne, fem rekorder, sæsonsummer på syv cifre og en fyldt stilling.
+{
+    const length = s => [...s].length;
+    const id = i => `${100000000000000000n + BigInt(i)}`;
+    const ids = Array.from({ length: 20 }, (_, i) => id(i));
+    const todays = ids.map((pid, i) => dayRoll(pid, 1000000 + i, 30000 - i * 100, 'anomaly', i));
+    const at = () => ({ topPercent: 0.5, bottomPercent: 99.5 });
+    const records = ids.slice(0, 6).map((pid, i) =>
+        ({ roll: todays[i], record: { scope: i === 0 ? 'global' : 'personal', kind: 'high' } }));
+    const standings = ids.map((pid, i) => ({
+        _id: pid, name: `Spillernavn-nummer-${String(i).padStart(4, '0')}`,
+        totalEp: 2500000 - i * 1000, days: 120, wins: 20 - i, best: 1250000
+    }));
+    const sections = [
+        `🎲 **RNGdle Result of the Day** 🎲`,
+        ...formatRngdleDayResult(todays, at, records),
+        `Participants today: ${ids.map(pid => `<@${pid}>`).join(' ')}`
+    ];
+    check('podie, rekorder og deltagere fylder alene mere end der er plads til med fuld stilling',
+        length([...sections, ''].join('\n\n')) > 2000 - 15 * 60, true);
+
+    const content = fitRngdleAnnouncement(sections, standings);
+    const board = content.split('\n\n').at(-1).split('\n');
+    check('den samlede besked holder sig under Discords grænse', length(content) <= 2000, true);
+    check('stillingen er stadig med, skåret nedefra', board[0], '🏅 **All-time RNGdle leaderboard** 🏅');
+    check('den bedste står øverst', board[2].startsWith('🥇Spillernavn-nummer-0000'), true);
+    check('halelinjen tæller de skårne', board.at(-1), `…and ${20 - (board.length - 3)} more`);
+    check('der blev rent faktisk skåret', board.length - 3 < 15, true);
+    check('én række mere ville ikke have passet',
+        length(fitRngdleAnnouncement(sections, standings, 100000).split('\n\n').at(-1)) > length(content.split('\n\n').at(-1)), true);
+
+    // Er der plads, vises stillingen som altid — loftet på 15 og en halelinje.
+    const roomy = fitRngdleAnnouncement(sections.slice(0, 2), standings);
+    check('med plads nok skæres intet ud over det faste loft',
+        roomy.split('\n\n').at(-1).split('\n').length, 2 + 15 + 1);
+
+    // Kan ikke én række få plads, udgår stillingen, og sektionerne falder bagfra.
+    const tight = fitRngdleAnnouncement(sections, standings, length(sections.slice(0, 2).join('\n\n')) + 5);
+    check('uden plads til stillingen står podiet tilbage', tight, sections.slice(0, 2).join('\n\n'));
+    check('uden stilling falder vi tilbage til sektionerne', fitRngdleAnnouncement(sections, [], 100000), sections.join('\n\n'));
+}
+
 if (failures.length) {
     console.error('❌ Svarvejen opfører sig ikke som forventet:');
     for (const f of failures) console.error('   ' + f);
     process.exit(1);
 }
 
-console.log('✅ Svar leveres korrekt, pointene skrives med $inc, holdnavne er sikre at vise, og historikkens percentiler passer');
+console.log('✅ Svar leveres korrekt, pointene skrives med $inc, holdnavne er sikre at vise, og historikkens percentiler passer, og dagsresultatet kårer podiet og rekorderne');

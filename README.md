@@ -168,7 +168,10 @@ Sæt `RNGDLE_CHANNEL_ID` i `wrangler.toml` til ID'et på den kanal, spillet skal
 køre i. RNGdle-kommandoerne virker **kun** der, og de øvrige kommandoer virker
 **alle andre steder end** der — Elo-ranglisten scopes på kanal, så de to ting
 skal holdes adskilt. Hver dag kl. 16:00 (København) annoncerer botten dagens
-bedste rul og den samlede stilling. Det kræver `DISCORD_BOT_TOKEN` som secret.
+tre bedste rul med percentil, de rekorder dagen satte, og den samlede stilling.
+Beskeden måles som helhed mod Discords 2000 tegn: bliver den for lang, skæres
+stillingen nedefra én række ad gangen, indtil den passer. Det kræver
+`DISCORD_BOT_TOKEN` som secret.
 
 Døgnet følger København, ikke UTC. Hvert rul gemmes som ét dokument i
 `RngdleRolls`-kollektionen, og stillingen regnes altid ud fra rullene — der er
