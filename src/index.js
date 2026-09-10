@@ -1517,10 +1517,13 @@ export function recordsForDay(todays, before) {
     return records;
 }
 
-// En Discord-besked kan højst være 2000 tegn, så både badge-listen og stillingen
-// skæres af frem for at risikere at hele beskeden bliver afvist.
+// En Discord-besked kan højst være 2000 tegn, så både badge-listen, stillingen og
+// dagens rekorder skæres af frem for at risikere at hele beskeden bliver afvist.
+// Rekordloftet er lavt, fordi rekorderne deler besked med podiet, deltagerlisten
+// og stillingen, der tilsammen allerede kan fylde ~1750 tegn.
 const RNGDLE_BADGE_LIMIT = 12;
 const RNGDLE_LEADERBOARD_LIMIT = 15;
+const RNGDLE_DAILY_RECORD_LIMIT = 5;
 
 // Én percentilside pænt formateret. Vi viser kun få decimaler, så "0,003 %" ikke
 // drukner i støj: store tal rundes til hele, ellers holder vi to betydende cifre.
@@ -1599,9 +1602,16 @@ export function formatRngdleDayResult(todays, percentileAt, records) {
     ];
 
     if (records.length) {
-        sections.push(records.map(({ roll, record }) =>
-            `<@${roll.playerId}> ${RNGDLE_RECORD_ANNOUNCEMENTS[`${record.scope}:${record.kind}`]}`
-        ).join('\n'));
+        // Globale rekorder er de interessante, så de skal med før de personlige
+        // når der skæres. Den stabile sortering holder rullerækkefølgen inden for
+        // hver gruppe.
+        const ordered = [...records].sort((a, b) =>
+            (a.record.scope === 'global' ? 0 : 1) - (b.record.scope === 'global' ? 0 : 1));
+        const shown = ordered.slice(0, RNGDLE_DAILY_RECORD_LIMIT);
+        const lines = shown.map(({ roll, record }) =>
+            `<@${roll.playerId}> ${RNGDLE_RECORD_ANNOUNCEMENTS[`${record.scope}:${record.kind}`]}`);
+        if (ordered.length > shown.length) lines.push(`…and ${ordered.length - shown.length} more records`);
+        sections.push(lines.join('\n'));
     }
     return sections;
 }

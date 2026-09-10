@@ -262,6 +262,26 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     check('uden rekorder er der kun podiet', formatRngdleDayResult(todays, () => null, []).length, 1);
     check('uden percentil står linjen uden parentes',
         formatRngdleDayResult([todays[2]], () => null, [])[0].split('\n')[1], '🥇 <@carl> — 🎲 **333** 🗑️ **100 EP**');
+
+    // Rekordlisten er ikke bundet af podiets tre, så den skal have et loft — ellers
+    // kan en dag med mange personlige rekorder vælte hele beskeden over 2000 tegn.
+    // Globale rekorder skal med før de personlige, og resten tælles i halelinjen.
+    const many = [
+        ...['p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map((id, i) =>
+            ({ roll: dayRoll(id, i, 1000 + i, 'rare', i), record: { scope: 'personal', kind: 'high' } })),
+        { roll: dayRoll('g1', 7, 30000, 'anomaly', 7), record: { scope: 'global', kind: 'high' } }
+    ];
+    const capped = formatRngdleDayResult(todays, () => null, many)[1].split('\n');
+    check('rekordsektionen skæres af med global rekord først og en halelinje', capped, [
+        '<@g1> 👑 set a **NEW ALL-TIME HIGH** — nobody here has ever rolled better!',
+        '<@p1> 🎉 set a **new personal record** — their best roll ever!',
+        '<@p2> 🎉 set a **new personal record** — their best roll ever!',
+        '<@p3> 🎉 set a **new personal record** — their best roll ever!',
+        '<@p4> 🎉 set a **new personal record** — their best roll ever!',
+        '…and 2 more records'
+    ]);
+    check('præcis ved loftet er der ingen halelinje',
+        formatRngdleDayResult(todays, () => null, many.slice(0, 5))[1].split('\n').length, 5);
 }
 
 if (failures.length) {
