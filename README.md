@@ -10,6 +10,7 @@ En Discord-bot der holder styr på Elo-ranking for single- og double-kampe. Bygg
 - Sæsoner med historik og statistik
 - Udfordringer, resultatrapportering og accept/afvis-flow
 - Holdnavne, som et makkerpar selv sætter pr. kanal
+- Wordle-rangliste bygget på gruppens daglige resultat fra Wordle-appen
 - Admin-kommandoer (nulstil sæson, annullér kampe m.m.)
 
 ## Tech stack
@@ -244,6 +245,60 @@ af bandlysningen virker stadig; den sættes på næste cron-kørsel efter deploy
 
 Nu hvor botten selv trækker tallet, er det i praksis ikke længere muligt at snyde med
 et resultat — bandlysning er kun et værktøj til at holde nogen ude af spillet.
+
+### Wordle
+
+Wordle-appen poster selv gruppens resultat hver morgen i Wordle-kanalen — én linje pr.
+antal forsøg, med kronen på dagens bedste:
+
+```
+**Your group is on an 18 day streak!** 🔥 Here are yesterday's results:
+👑 2/6: @Tobis @Troels
+3/6: @mikkel @Christian Lund @Morten @Peter - pfrank
+4/6: @SuNe_dEr_kOdEr
+X/6: @Grejbar
+```
+
+Botten læser den besked kl. 10 (København), gemmer dagen og poster dagens point
+plus stillingen. Der er ingen kommando spillerne skal huske, og derfor heller
+ikke noget at snyde med: tallene kommer fra Wordle.
+
+| Kommando          | Hvad den gør                                              |
+| ----------------- | --------------------------------------------------------- |
+| `/wordle-ranking` | Den samlede Wordle-rangliste.                              |
+| `/wordle-stats`   | En spillers tal og fordeling. Uden `player` er det dine egne. |
+| `/wordle-day`     | Seneste dags resultat med pointændringer.                  |
+
+#### Pointsystemet
+
+Hver dag er en lille turnering: **alle mod alle**, færrest forsøg vinder, og et
+`X/6` taber til alle der løste ordet. Alle starter på **1000**.
+
+- Alle bedømmes mod det de stod i, da dagen begyndte — rækkefølgen af par kan
+  ikke ændre resultatet.
+- De 48 point en dag kan flytte deles ud over modstanderne, så en dag med 8
+  spillere ikke flytter fire gange så meget som en dag med 2. Ellers ville
+  ranglisten mest måle, hvor mange der var med.
+- At slå en højt rangeret spiller giver mere end at slå en lavt rangeret. Det er
+  almindelig Elo.
+- Er man den eneste der spillede, står pointene stille. Dagen tælles som spillet.
+- Snittet af forsøg regnes kun på løste ord; et `X/6` har intet meningsfuldt tal.
+
+#### Opsætning
+
+Sæt `WORDLE_CHANNEL_ID` i `wrangler.toml` til kanalen hvor Wordle-appen poster
+(højreklik på kanalen i Discord → **Kopiér kanal-ID**). Tom værdi slår
+Wordle-ranglisten helt fra.
+
+Botten skal kunne **læse beskedhistorik** i kanalen, og **GUILD_MEMBERS**-intenten
+skal være slået til på applikationen: Wordle skriver nogle deltagere som ren tekst
+(`@Tobis`) i stedet for som en rigtig mention, og de kan kun kobles til en spiller
+via serverens medlemsliste. Kan medlemslisten ikke hentes, springes indlæsningen
+over og prøves igen næste dag — en halv dag gemmes aldrig.
+
+Vil du se en rigtig besked, som botten ser den, kør `node test/wordle-probe.mjs`.
+Den spørger om bot-tokenet, skjuler det mens det tastes, og lægger svaret i
+`test/wordle-dump.json` (git-ignoreret).
 
 Peg til sidst din Discord-apps **Interactions Endpoint URL** hen på din deployede Worker-URL.
 

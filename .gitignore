@@ -20,3 +20,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Rå Discord-dump fra test/wordle-probe.mjs — kun til udvikling.
+test/wordle-dump.json

@@ -1,6 +1,10 @@
 import { InteractionType, InteractionResponseType, verifyKey } from "discord-interactions";
 import { MongoClient } from "mongodb";
 import { computeRoll, tierEmoji, MAX_ROLL } from "./rngdle.js";
+import {
+    WORDLE_APP_ID, WORDLE_START_RATING,
+    parseWordleMessage, wordleEloUpdates, wordleStatsIncrement, wordleScoreLabel
+} from "./wordle.js";
 
 const DB_ELO_NAME = "EloRanking";
 const PLAYERS_COLLECTION = "Players";
@@ -16,6 +20,9 @@ const TEAMS_COLLECTION = "Teams";
 const RNGDLE_ROLLS_COLLECTION = "RngdleRolls";
 // Kommandoer der hører til spillet frem for Elo-ranglisten.
 const RNGDLE_COMMANDS = new Set(["roll", "roll-ranking", "roll-stats", "roll-history"]);
+// Kommandoer der hører til Wordle-ranglisten. Der er ingen kommando til at
+// indsende et resultat — dem læser cron'en ud af Wordle-appens egen besked.
+const WORDLE_COMMANDS = new Set(["wordle-ranking", "wordle-stats", "wordle-day"]);
 const HANNIBAL_ID = "253543574342205440";
 const K = 32;
 // En tilskuer får 20% af det holdet han satsede på vandt eller tabte — dog
@@ -37,6 +44,9 @@ export default {
     async scheduled(event, env, ctx) {
         ctx.waitUntil(enforceRngdleBans(env));
         ctx.waitUntil(announceRngdleWinner(env));
+        ctx.waitUntil(ingestWordleResults(env).catch(
+            err => console.error("Wordle-indlæsningen fejlede:", err)
+        ));
     },
 
     async fetch(request, env, ctx) {
@@ -112,6 +122,31 @@ export default {
                 }
             }
 
+            // Samme adskillelse for Wordle-kanalen: dens stilling hører til den
+            // kanal, og Elo-kommandoerne har intet at gøre der.
+            const isWordleCommand = WORDLE_COMMANDS.has(name);
+            if (env.WORDLE_CHANNEL_ID) {
+                const inWordleChannel = channel_id === env.WORDLE_CHANNEL_ID;
+                if (inWordleChannel && !isWordleCommand) {
+                    return Response.json({
+                        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        data: {
+                            content: "Commands are disabled here — this channel is only for Wordle. Use **/wordle-ranking** or **/wordle-stats**.",
+                            flags: 64
+                        }
+                    });
+                }
+                if (!inWordleChannel && isWordleCommand) {
+                    return Response.json({
+                        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        data: {
+                            content: `The Wordle ranking lives in <#${env.WORDLE_CHANNEL_ID}> — ask over there.`,
+                            flags: 64
+                        }
+                    });
+                }
+            }
+
             // Bandlyste kan hverken rulle eller trække stillingen frem.
             if (isRngdleCommand && getBannedRngdleIds(env).has(id)) {
                 return Response.json({
@@ -145,7 +180,10 @@ export default {
 // kvitterer, for en besked kan ikke skifte synlighed bagefter. /roll står ikke
 // på listen: den er offentlig i det almindelige tilfælde, og sendReply klarer
 // det ephemerale "du har allerede rullet i dag".
-export const EPHEMERAL_COMMANDS = new Set(["roll-ranking", "roll-stats", "roll-history", "bet", "team-name", "team-list"]);
+export const EPHEMERAL_COMMANDS = new Set([
+    "roll-ranking", "roll-stats", "roll-history", "bet", "team-name", "team-list",
+    "wordle-ranking", "wordle-stats", "wordle-day"
+]);
 
 async function replyToCommand(interaction, env, ctx) {
     // Én linje pr. kommando, også når alt gik godt. "Applikationen svarede ikke"
@@ -377,6 +415,41 @@ async function runCommand(interaction, env, ctx) {
                 return respondEphemeral(formatRngdleHistory({
                     ...history, name: currentName(historyNames, targetId, history.name)
                 }));
+            }
+
+            // --- WORDLE COMMANDS ---
+
+            case "wordle-ranking": {
+                const standings = await getWordleStandings(db, channel_id);
+                const wordleNames = await fetchGuildDisplayNames(env, guild_id);
+                return respondEphemeral(
+                    formatWordleLeaderboard(withCurrentNames(standings, wordleNames))
+                    ?? "No Wordle results yet — the ranking is built from the Wordle app's daily post."
+                );
+            }
+
+            case "wordle-stats": {
+                const targetId = options?.find(o => o.name === "player")?.value ?? id;
+                const player = await db.collection(WORDLE_PLAYERS_COLLECTION)
+                    .findOne({ channelId: channel_id, playerId: targetId });
+                if (!player) {
+                    return respondEphemeral(targetId === id
+                        ? "You have no Wordle results yet — play with the group and you are in from tomorrow."
+                        : "That player has no Wordle results yet.");
+                }
+                const statNames = await fetchGuildDisplayNames(env, guild_id);
+                return respondEphemeral(formatWordlePlayerStats(player, statNames));
+            }
+
+            case "wordle-day": {
+                // Nyeste afregnede dag. En dag der lige er læst ind, men hvor
+                // afregningen fejlede, har ingen pointtal at vise endnu.
+                const day = await db.collection(WORDLE_DAYS_COLLECTION)
+                    .findOne({ channelId: channel_id, eloApplied: true }, { sort: { dateKey: -1 } });
+                if (!day) return respondEphemeral("No Wordle day has been recorded yet.");
+
+                const dayNames = await fetchGuildDisplayNames(env, guild_id);
+                return respondEphemeral(formatWordleDay(day, day.updates, dayNames).join('\n\n'));
             }
 
             // --- RANKING OG BRUGER COMMANDS ---
@@ -1058,7 +1131,13 @@ async function runCommand(interaction, env, ctx) {
                         : `One roll a day with **/roll** — a random number scored on how interesting it is.\n`) +
                     `**/roll-ranking** shows the all-time EP standings — pick **board** to see the highest or lowest rolls ever, or today's field instead.\n` +
                     `**/roll-stats** shows a player's stats — rolls, total EP, wins, best and lowest roll, and biggest badge.\n` +
-                    `**/roll-history** lists a player's rolls newest first, each with how it ranks against every roll ever.`
+                    `**/roll-history** lists a player's rolls newest first, each with how it ranks against every roll ever.\n\n` +
+                    "**WORDLE**\n" +
+                    (env.WORDLE_CHANNEL_ID
+                        ? `Play Wordle with the group in <#${env.WORDLE_CHANNEL_ID}> — nothing to type, the bot reads the Wordle app's morning post.\n`
+                        : `Play Wordle with the group — nothing to type, the bot reads the Wordle app's morning post.\n`) +
+                    `Every day is a mini tournament: everyone against everyone, fewest guesses wins, **X/6** loses to all who solved it.\n` +
+                    `**/wordle-ranking** shows the standings, **/wordle-stats** a player's numbers, **/wordle-day** the latest results.`
                 );
 
             default:
@@ -2071,4 +2150,289 @@ function getRerolledTeams([p1, p2, p3, p4]) {
 function calculateEloRatingDifference(playerRating, opponentRating, score, K = 32) {
     const expectedScore = 1 / (1 + Math.pow(10, (opponentRating - playerRating) / 400));
     return Math.round(K * (score - expectedScore));
+}
+
+// --- Wordle ---
+
+// Dagsresultaterne gemmes som ét dokument pr. dag (kilden) og ét pr. spiller
+// (ranglisten). Dagsdokumentet er også det der gør indlæsningen idempotent: det
+// findes præcis når dagen er læst ind, så den samme besked kan aldrig give point
+// to gange.
+const WORDLE_DAYS_COLLECTION = "WordleDays";
+const WORDLE_PLAYERS_COLLECTION = "WordlePlayers";
+
+// Wordle-appen poster mellem 07:00 og 09:00 i København, men tidspunktet
+// varierer. Vi læser derfor kl. 10, hvor beskeden er der med sikkerhed, og
+// henter 50 beskeder tilbage, så en dag ikke går tabt hvis et cron-tick fejler.
+const WORDLE_ANNOUNCE_HOUR = 10;
+const WORDLE_HISTORY_LIMIT = 50;
+const WORDLE_LEADERBOARD_LIMIT = 15;
+
+// Ét dagsdokument pr. kanal pr. dag. Det unikke indeks er det der faktisk
+// håndhæver reglen — to samtidige cron-tick kan ikke begge indlæse samme dag.
+let wordleDayIndexEnsured = null;
+function ensureWordleDayIndex(db) {
+    if (!wordleDayIndexEnsured) {
+        wordleDayIndexEnsured = db.collection(WORDLE_DAYS_COLLECTION)
+            .createIndex({ channelId: 1, dateKey: 1 }, { unique: true })
+            .catch(err => { wordleDayIndexEnsured = null; throw err; });
+    }
+    return wordleDayIndexEnsured;
+}
+
+// Beskeden siger "Here are yesterday's results", så gåden hører til dagen før
+// beskeden. Uden det forskub ville stillingen stå en dag forkert.
+export function wordlePuzzleDateKey(timestamp) {
+    return getCopenhagenParts(new Date(Date.parse(timestamp) - 24 * 60 * 60 * 1000)).dateKey;
+}
+
+// Navneopslag begge veje fra ét medlemskald: id -> visningsnavn til ranglisten,
+// og navn -> id til de deltagere Wordle skriver som ren tekst (@Tobis). Alle tre
+// navneformer lægges ind, for vi ved ikke hvilken af dem appen bruger.
+export function buildWordleNameIndex(members) {
+    const byId = new Map();
+    const byName = new Map();
+    for (const m of members) {
+        byId.set(m.user.id, memberDisplayName(m));
+        for (const name of [m.nick, m.user.global_name, m.user.username]) {
+            if (name) byName.set(name.toLowerCase(), m.user.id);
+        }
+    }
+    return { byId, byName };
+}
+
+async function fetchWordleNameIndex(env, guildId) {
+    if (!env.DISCORD_BOT_TOKEN || !guildId) return null;
+
+    const res = await fetch(
+        `https://discord.com/api/v10/guilds/${guildId}/members?limit=1000`,
+        { headers: { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` } }
+    );
+    if (!res.ok) {
+        // Uden navneopslaget kan tekst-mentions ikke kobles til en spiller, og
+        // så ville dagen blive gemt halv — og en halv dag kan ikke rettes
+        // bagefter, for dagen tælles som indlæst. Hellere springe over og prøve
+        // igen i morgen, hvor de 50 beskeder stadig rummer dagen.
+        console.log(`Wordle: kunne ikke hente servermedlemmer (${res.status}) — springer indlæsningen over`);
+        return null;
+    }
+    return buildWordleNameIndex(await res.json());
+}
+
+async function fetchWordleMessages(env) {
+    const res = await fetch(
+        `https://discord.com/api/v10/channels/${env.WORDLE_CHANNEL_ID}/messages?limit=${WORDLE_HISTORY_LIMIT}`,
+        { headers: { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` } }
+    );
+    if (!res.ok) {
+        console.log(`Wordle: kunne ikke læse kanalen (${res.status})`);
+        return [];
+    }
+    // Ældste først: Elo afhænger af hvad spillerne stod i da dagen blev spillet,
+    // så dagene skal afregnes i samme rækkefølge som de blev spillet.
+    return (await res.json())
+        .filter(m => m.author?.id === WORDLE_APP_ID)
+        .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+}
+
+// Gemmer dagen som "endnu ikke afregnet". Findes den allerede, returneres null —
+// så har dagen fået sine point, og der er intet at gøre.
+async function claimWordleDay(db, channelId, day) {
+    const doc = {
+        channelId, dateKey: day.dateKey, messageId: day.messageId,
+        results: day.results, unresolved: day.unresolved, streak: day.streak,
+        eloApplied: false, createdAt: new Date()
+    };
+    try {
+        await db.collection(WORDLE_DAYS_COLLECTION).insertOne(doc);
+        return doc;
+    } catch (err) {
+        // 11000 = unique index violation, dvs. dagen er læst ind før.
+        if (err.code !== 11000) throw err;
+        return null;
+    }
+}
+
+// Afregner én dag: point og statistik til alle deltagere. Flaget sættes
+// allersidst, så en dag der går i stykken midtvejs bliver taget med næste gang
+// i stedet for at være tabt.
+async function applyWordleDay(db, channelId, day, namesById) {
+    const ids = day.results.map(r => r.playerId);
+    const existing = await db.collection(WORDLE_PLAYERS_COLLECTION)
+        .find({ channelId, playerId: { $in: ids } }).toArray();
+    const ratings = new Map(existing.map(p => [p.playerId, p.rating]));
+
+    const updates = wordleEloUpdates(day.results, playerId => ratings.get(playerId) ?? WORDLE_START_RATING);
+
+    await db.collection(WORDLE_PLAYERS_COLLECTION).bulkWrite(updates.map(u => {
+        const inc = wordleStatsIncrement(u);
+        return {
+            updateOne: {
+                filter: { channelId, playerId: u.playerId },
+                update: {
+                    // Rating sættes, ikke lægges til: den nye værdi er regnet
+                    // ud fra det spilleren stod i, da dagen blev afregnet, og
+                    // en ny spiller starter på WORDLE_START_RATING. Cron'en er
+                    // den eneste der skriver her, og en dag kan kun afregnes én
+                    // gang (claimWordleDay), så der er ingen samtidig skrivning
+                    // at tabe. Tællerne bruger $inc, for de lægger sig oven på
+                    // det der allerede står — og et manglende felt starter på 0.
+                    $set: {
+                        rating: u.rating,
+                        name: namesById?.get(u.playerId) ?? u.name ?? u.playerId,
+                        lastDateKey: day.dateKey
+                    },
+                    $inc: {
+                        days: inc.days, wins: inc.wins,
+                        solved: inc.solved, failed: inc.failed, solvedGuesses: inc.solvedGuesses,
+                        [`distribution.${wordleScoreLabel(u.guesses)}`]: 1
+                    }
+                },
+                upsert: true
+            }
+        };
+    }));
+
+    await db.collection(WORDLE_DAYS_COLLECTION).updateOne(
+        { channelId, dateKey: day.dateKey },
+        {
+            $set: {
+                eloApplied: true,
+                updates: updates.map(u => ({
+                    playerId: u.playerId, name: u.name, guesses: u.guesses,
+                    delta: u.delta, rating: u.rating, rank: u.rank, won: u.won
+                }))
+            }
+        }
+    );
+    return updates;
+}
+
+// Læser Wordle-appens beskeder, gemmer de dage vi ikke har set før, og annoncerer
+// den nyeste sammen med stillingen.
+async function ingestWordleResults(env) {
+    if (!env.DISCORD_BOT_TOKEN || !env.WORDLE_CHANNEL_ID || !env.MONGODB_URI) return;
+    if (getCopenhagenParts(new Date()).hour !== WORDLE_ANNOUNCE_HOUR) return;
+
+    const names = await fetchWordleNameIndex(env, await fetchChannelGuildId(env, env.WORDLE_CHANNEL_ID));
+    if (!names) return;
+
+    const messages = await fetchWordleMessages(env);
+    if (messages.length === 0) return;
+
+    const client = new MongoClient(env.MONGODB_URI, MONGO_TIMEOUTS);
+    let announcement = null;
+    try {
+        await client.connect();
+        const db = client.db(DB_ELO_NAME);
+        await ensureWordleDayIndex(db);
+
+        // Uafregnede dage fra et afbrudt gennemløb kommer først: nye dage skal
+        // ikke lægges oven på en stilling der mangler dem.
+        const days = await db.collection(WORDLE_DAYS_COLLECTION)
+            .find({ channelId: env.WORDLE_CHANNEL_ID, eloApplied: false })
+            .sort({ dateKey: 1 }).toArray();
+
+        for (const message of messages) {
+            const parsed = parseWordleMessage(message.content, names.byName);
+            if (!parsed) continue;
+            const dateKey = wordlePuzzleDateKey(message.timestamp);
+            if (days.some(d => d.dateKey === dateKey)) continue;
+            const claimed = await claimWordleDay(db, env.WORDLE_CHANNEL_ID, { ...parsed, dateKey, messageId: message.id });
+            if (claimed) days.push(claimed);
+        }
+
+        let newest = null;
+        for (const day of days.sort((a, b) => a.dateKey.localeCompare(b.dateKey))) {
+            if (day.unresolved?.length) {
+                console.log(`Wordle ${day.dateKey}: kunne ikke genkende ${day.unresolved.join(', ')}`);
+            }
+            newest = { day, updates: await applyWordleDay(db, env.WORDLE_CHANNEL_ID, day, names.byId) };
+        }
+        if (!newest) return;
+
+        const standings = withCurrentNames(
+            await getWordleStandings(db, env.WORDLE_CHANNEL_ID), names.byId
+        );
+        announcement = fitWordleAnnouncement(formatWordleDay(newest.day, newest.updates, names.byId), standings);
+    } finally {
+        await client.close();
+    }
+
+    await fetch(`https://discord.com/api/v10/channels/${env.WORDLE_CHANNEL_ID}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}` },
+        // Beskeden viser spillernes egne visningsnavne, og de skal ikke kunne
+        // pinge nogen — hverken en bruger eller @everyone.
+        body: JSON.stringify({ content: announcement, allowed_mentions: { parse: [] } })
+    });
+}
+
+async function getWordleStandings(db, channelId) {
+    return db.collection(WORDLE_PLAYERS_COLLECTION)
+        .find({ channelId })
+        .sort({ rating: -1, wins: -1 })
+        .toArray();
+}
+
+// Snittet regnes kun på løste ord (se wordleStatsIncrement), så en spiller der
+// kun har X'er har intet snit at vise.
+export function wordleAverage(player) {
+    return player.solved > 0 ? player.solvedGuesses / player.solved : null;
+}
+
+export function formatWordleLeaderboard(standings, limit = WORDLE_LEADERBOARD_LIMIT) {
+    return formatRngdleBoard("🟩 **Wordle leaderboard** 🟩", standings, (p, i) => {
+        const avg = wordleAverage(p);
+        const days = `${p.days} ${p.days === 1 ? 'day' : 'days'}`;
+        return `${rankPrefix(i)}${p.name} — **${p.rating}** (${days}, ${p.wins} 👑${avg ? `, avg ${avg.toFixed(2)}` : ''})`;
+    }, limit);
+}
+
+// Dagens resultat med pointændringen pr. spiller. Bedste resultat øverst.
+export function formatWordleDay(day, updates, namesById) {
+    const rows = [...updates].sort((a, b) => a.guesses - b.guesses || b.delta - a.delta);
+    const lines = rows.map(u => {
+        const name = namesById?.get(u.playerId) ?? u.name ?? u.playerId;
+        const sign = u.delta > 0 ? '+' : '';
+        return `${u.won ? '👑 ' : ''}**${wordleScoreLabel(u.guesses)}** ${name} (${sign}${u.delta} → ${u.rating})`;
+    });
+
+    const heading = day.streak
+        ? `🟩 **Wordle — ${day.dateKey}** 🟩  🔥 ${day.streak} day group streak`
+        : `🟩 **Wordle — ${day.dateKey}** 🟩`;
+
+    return [`${heading}\n${lines.join('\n')}`];
+}
+
+export function formatWordlePlayerStats(player, namesById) {
+    const avg = wordleAverage(player);
+    const dist = WORDLE_SCORE_KEYS.map(k => `${k}: ${player.distribution?.[k] ?? 0}`).join('  ');
+
+    return [
+        `📊 **Wordle stats — ${namesById?.get(player.playerId) ?? player.name}** 📊`,
+        "--------------------------------------",
+        `Rating: **${player.rating}**`,
+        `Days played: **${player.days}** (${player.wins} 👑)`,
+        `Solved: **${player.solved}** of ${player.days}${player.failed ? ` — ${player.failed} failed` : ''}`,
+        `Average guesses: ${avg ? `**${avg.toFixed(2)}**` : '—'}`,
+        dist
+    ].join('\n');
+}
+
+const WORDLE_SCORE_KEYS = ['1/6', '2/6', '3/6', '4/6', '5/6', '6/6', 'X/6'];
+
+// Dagsbeskeden må ikke sprænge Discords grænse på 2000 tegn. Dagens resultat er
+// det vigtigste, så stillingen skæres nedefra — og falder hele stillingen væk,
+// står dagen der stadig.
+export function fitWordleAnnouncement(sections, standings, limit = DISCORD_MESSAGE_LIMIT) {
+    const build = rows =>
+        [...sections, rows ? formatWordleLeaderboard(standings, rows) : null].filter(Boolean).join('\n\n');
+
+    const maxRows = Math.min(WORDLE_LEADERBOARD_LIMIT, standings.length);
+    for (let rows = maxRows; rows >= 0; rows--) {
+        const content = build(rows);
+        if (messageLength(content) <= limit) return content;
+    }
+    return sections[0];
 }

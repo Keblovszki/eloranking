@@ -10,11 +10,17 @@ RNGDLE_CHANNEL_ID = "1536627129691938846"
 # channel. Empty = nobody is banned. Deploy after changing.
 RNGDLE_BANNED_IDS = ""
 
-# Cron is always UTC. Both entries fire daily; the handler only acts on the
-# one that lands at 16:00 in Copenhagen, since Copenhagen alternates between
-# UTC+1 (CET) and UTC+2 (CEST) across the year.
+# Kanalen hvor Wordle-appen poster gruppens dagsresultat. Tom = Wordle-ranglisten
+# er slået helt fra.
+WORDLE_CHANNEL_ID = "1542777817467457588"
+
+# Cron is always UTC, and Copenhagen alternates between UTC+1 (CET) and UTC+2
+# (CEST) across the year — so each Copenhagen hour needs two entries, and each
+# handler only acts on the one that lands on its own hour.
+# 14/15 -> 16:00 Copenhagen: the RNGdle winner of the day.
+# 08/09 -> 10:00 Copenhagen: reading the Wordle app's morning post.
 [triggers]
-crons = ["0 14 * * *", "0 15 * * *"]
+crons = ["0 14 * * *", "0 15 * * *", "0 8 * * *", "0 9 * * *"]
 
 # Gemmer logs i Cloudflare (Workers Logs) i stedet for kun at vise dem live i
 # `wrangler tail`. Fejlen her kommer sjældent og aldrig mens man kigger, så uden
