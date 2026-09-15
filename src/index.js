@@ -22,7 +22,9 @@ const RNGDLE_ROLLS_COLLECTION = "RngdleRolls";
 const RNGDLE_COMMANDS = new Set(["roll", "roll-ranking", "roll-stats", "roll-history"]);
 // Kommandoer der hører til Wordle-ranglisten. Der er ingen kommando til at
 // indsende et resultat — dem læser cron'en ud af Wordle-appens egen besked.
-const WORDLE_COMMANDS = new Set(["wordle-ranking", "wordle-stats", "wordle-day"]);
+const WORDLE_COMMANDS = new Set([
+    "wordle-ranking", "wordle-stats", "wordle-day", "wordle-seasons", "wordle-reset-season"
+]);
 const HANNIBAL_ID = "253543574342205440";
 const K = 32;
 // En tilskuer får 20% af det holdet han satsede på vandt eller tabte — dog
@@ -182,7 +184,7 @@ export default {
 // det ephemerale "du har allerede rullet i dag".
 export const EPHEMERAL_COMMANDS = new Set([
     "roll-ranking", "roll-stats", "roll-history", "bet", "team-name", "team-list",
-    "wordle-ranking", "wordle-stats", "wordle-day"
+    "wordle-ranking", "wordle-stats", "wordle-day", "wordle-seasons"
 ]);
 
 async function replyToCommand(interaction, env, ctx) {
@@ -420,12 +422,40 @@ async function runCommand(interaction, env, ctx) {
             // --- WORDLE COMMANDS ---
 
             case "wordle-ranking": {
+                const seasonId = options?.find(o => o.name === "season")?.value;
+                if (seasonId !== undefined) {
+                    const season = await db.collection(WORDLE_SEASONS_COLLECTION)
+                        .findOne({ channelId: channel_id, seasonId });
+                    if (!season) {
+                        return respondEphemeral(`There is no Wordle season **${seasonId}** — **/wordle-seasons** lists the ones there are.`);
+                    }
+                    const seasonNames = await fetchGuildDisplayNames(env, guild_id);
+                    return respondEphemeral(formatWordleLeaderboard(
+                        withCurrentNames(season.standings, seasonNames), WORDLE_LEADERBOARD_LIMIT, wordleSeasonTitle(season)
+                    ));
+                }
+
                 const standings = await getWordleStandings(db, channel_id);
                 const wordleNames = await fetchGuildDisplayNames(env, guild_id);
                 return respondEphemeral(
                     formatWordleLeaderboard(withCurrentNames(standings, wordleNames))
                     ?? "No Wordle results yet — the ranking is built from the Wordle app's daily post."
                 );
+            }
+
+            case "wordle-seasons": {
+                const seasons = await getWordleSeasons(db, channel_id);
+                const current = await currentWordleSeason(db, channel_id, seasons);
+                const listNames = await fetchGuildDisplayNames(env, guild_id);
+                return respondEphemeral(formatWordleSeasonList(seasons, current, listNames));
+            }
+
+            case "wordle-reset-season": {
+                if (id !== HANNIBAL_ID) return respond("Only admins can use this command!");
+                const season = await archiveWordleSeason(client, db, channel_id);
+                if (!season) return respond("There are no Wordle results to archive. The ranking is already empty.");
+                const resetNames = await fetchGuildDisplayNames(env, guild_id);
+                return respond(formatWordleSeasonEnd(season, resetNames));
             }
 
             case "wordle-stats": {
@@ -1137,7 +1167,7 @@ async function runCommand(interaction, env, ctx) {
                         ? `Play Wordle with the group in <#${env.WORDLE_CHANNEL_ID}> — nothing to type, the bot reads the Wordle app's morning post.\n`
                         : `Play Wordle with the group — nothing to type, the bot reads the Wordle app's morning post.\n`) +
                     `Every day is a mini tournament: everyone against everyone, fewest guesses wins, **X/6** loses to all who solved it.\n` +
-                    `**/wordle-ranking** shows the standings, **/wordle-stats** a player's numbers, **/wordle-day** the latest results.`
+                    `**/wordle-ranking** shows the standings — pick **season** to see a past one. **/wordle-stats** a player's numbers, **/wordle-day** the latest results, **/wordle-seasons** every season so far.`
                 );
 
             default:
@@ -2381,8 +2411,105 @@ export function wordleAverage(player) {
     return player.solved > 0 ? player.solvedGuesses / player.solved : null;
 }
 
-export function formatWordleLeaderboard(standings, limit = WORDLE_LEADERBOARD_LIMIT) {
-    return formatRngdleBoard("🟩 **Wordle leaderboard** 🟩", standings, (p, i) => {
+// --- Wordle-sæsoner ---
+
+// Én sæson er ét dokument: den endelige stilling som den stod da admin
+// nulstillede, plus hvilke dage den dækkede. Spillerne slettes fra WordlePlayers,
+// så alle starter forfra på WORDLE_START_RATING fra næste dags resultat — ligesom
+// /reset-season for Elo-ranglisten. Dagsdokumenterne bliver stående: de er
+// kilden, og en dag kan alligevel aldrig afregnes to gange.
+const WORDLE_SEASONS_COLLECTION = "WordleSeasons";
+
+// Stillingen udelades: listen skal kun vise vinderen, og en sæsons stilling er
+// det tungeste i dokumentet.
+async function getWordleSeasons(db, channelId) {
+    return db.collection(WORDLE_SEASONS_COLLECTION)
+        .find({ channelId }, { projection: { standings: { $slice: 1 } } })
+        .sort({ seasonId: 1 })
+        .toArray();
+}
+
+// Den igangværende sæson står ikke i kollektionen: den er de afregnede dage
+// efter den senest arkiverede sæsons sidste dag, og nummeret efter dens.
+async function currentWordleSeason(db, channelId, seasons) {
+    const last = seasons.at(-1);
+    const filter = { channelId, eloApplied: true, ...(last?.to ? { dateKey: { $gt: last.to } } : {}) };
+    const dateKeys = await db.collection(WORDLE_DAYS_COLLECTION)
+        .find(filter, { projection: { dateKey: 1 } })
+        .map(d => d.dateKey)
+        .toArray();
+    return { seasonId: (last?.seasonId ?? 0) + 1, ...wordleSeasonSpan(dateKeys) };
+}
+
+export function wordleSeasonSpan(dateKeys) {
+    if (dateKeys.length === 0) return { from: null, to: null, days: 0 };
+    const sorted = [...dateKeys].sort();
+    return { from: sorted[0], to: sorted.at(-1), days: sorted.length };
+}
+
+// Arkiv og sletning sker i én transaktion, så en fejl midtvejs ikke efterlader
+// sæsonen både gemt og igangværende. Null når der ikke er nogen at arkivere.
+async function archiveWordleSeason(client, db, channelId) {
+    const seasons = await getWordleSeasons(db, channelId);
+    const current = await currentWordleSeason(db, channelId, seasons);
+    const standings = await getWordleStandings(db, channelId);
+    if (standings.length === 0) return null;
+
+    const season = {
+        channelId,
+        seasonId: current.seasonId,
+        from: current.from,
+        to: current.to,
+        days: current.days,
+        standings: standings.map(({ _id, ...player }) => player),
+        archivedAt: new Date()
+    };
+    const session = client.startSession();
+    try {
+        await session.withTransaction(async () => {
+            await db.collection(WORDLE_SEASONS_COLLECTION).insertOne(season, { session });
+            await db.collection(WORDLE_PLAYERS_COLLECTION).deleteMany({ channelId }, { session });
+        });
+    } finally {
+        await session.endSession();
+    }
+    return season;
+}
+
+function wordleSeasonTitle(season) {
+    return `🟩 **Wordle leaderboard — season ${season.seasonId}** 🟩`;
+}
+
+function wordleSeasonDays(season) {
+    return `${season.days} ${season.days === 1 ? 'day' : 'days'}`;
+}
+
+export function formatWordleSeasonList(seasons, current, namesById) {
+    const lines = seasons.map(s => {
+        const span = s.days ? `${s.from} → ${s.to} (${wordleSeasonDays(s)})` : 'no days';
+        const winner = s.standings?.[0];
+        const crown = winner ? ` — 👑 ${namesById?.get(winner.playerId) ?? winner.name}` : '';
+        return `**Season ${s.seasonId}** — ${span}${crown}`;
+    });
+    const currentSpan = current.days ? `since ${current.from} (${wordleSeasonDays(current)})` : 'no days yet';
+    lines.push(`**Season ${current.seasonId}** (current) — ${currentSpan}`);
+
+    return "🟩 **Wordle seasons** 🟩\n" +
+        "--------------------------------------\n" +
+        lines.join('\n') +
+        "\n\nSee a past season with **/wordle-ranking season:<number>**.";
+}
+
+export function formatWordleSeasonEnd(season, namesById) {
+    const board = formatWordleLeaderboard(
+        withCurrentNames(season.standings, namesById), WORDLE_LEADERBOARD_LIMIT,
+        `🟩 **Wordle — season ${season.seasonId} is over!** 🟩`
+    );
+    return `${board}\n\nSeason ${season.seasonId + 1} starts now — everyone is back at ${WORDLE_START_RATING}.`;
+}
+
+export function formatWordleLeaderboard(standings, limit = WORDLE_LEADERBOARD_LIMIT, title = "🟩 **Wordle leaderboard** 🟩") {
+    return formatRngdleBoard(title, standings, (p, i) => {
         const avg = wordleAverage(p);
         const days = `${p.days} ${p.days === 1 ? 'day' : 'days'}`;
         return `${rankPrefix(i)}${p.name} — **${p.rating}** (${days}, ${p.wins} 👑${avg ? `, avg ${avg.toFixed(2)}` : ''})`;

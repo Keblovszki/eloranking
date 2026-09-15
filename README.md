@@ -263,11 +263,13 @@ Botten læser den besked kl. 10 (København), gemmer dagen og poster dagens poin
 plus stillingen. Der er ingen kommando spillerne skal huske, og derfor heller
 ikke noget at snyde med: tallene kommer fra Wordle.
 
-| Kommando          | Hvad den gør                                              |
-| ----------------- | --------------------------------------------------------- |
-| `/wordle-ranking` | Den samlede Wordle-rangliste.                              |
-| `/wordle-stats`   | En spillers tal og fordeling. Uden `player` er det dine egne. |
-| `/wordle-day`     | Seneste dags resultat med pointændringer.                  |
+| Kommando                | Hvad den gør                                                        |
+| ----------------------- | ------------------------------------------------------------------- |
+| `/wordle-ranking`       | Den samlede Wordle-rangliste. Med `season:` en tidligere sæsons.     |
+| `/wordle-stats`         | En spillers tal og fordeling. Uden `player` er det dine egne.        |
+| `/wordle-day`           | Seneste dags resultat med pointændringer.                            |
+| `/wordle-seasons`       | Alle sæsoner indtil nu, med vinder og hvilke dage de dækkede.        |
+| `/wordle-reset-season`  | Admin: afslutter sæsonen og starter en ny. Alle tilbage på 1000.     |
 
 #### Pointsystemet
 
@@ -283,6 +285,24 @@ Hver dag er en lille turnering: **alle mod alle**, færrest forsøg vinder, og e
   almindelig Elo.
 - Er man den eneste der spillede, står pointene stille. Dagen tælles som spillet.
 - Snittet af forsøg regnes kun på løste ord; et `X/6` har intet meningsfuldt tal.
+
+#### Sæsoner
+
+`/wordle-reset-season` (kun admin) afslutter den igangværende sæson: den endelige
+stilling gemmes som ét dokument i `WordleSeasons`-kollektionen, spillerne slettes
+fra `WordlePlayers`, og alle starter forfra på 1000 fra næste dags resultat.
+Arkiv og sletning sker i én transaktion. Sæsonerne nummereres fra 1, så den
+første nulstilling arkiverer sæson 1 og starter sæson 2. Botten svarer i kanalen
+med den endelige stilling. Dagsdokumenterne bliver stående, så en dag kan stadig
+aldrig afregnes to gange.
+
+`/wordle-seasons` viser alle sæsoner med vinder og hvilke dage de dækkede, og
+`/wordle-ranking season:1` viser en gammel sæsons stilling. Uden `season` er det
+altid den igangværende. `/wordle-stats` og `/wordle-day` handler kun om den
+igangværende sæson.
+
+Kommandoerne skal registreres i Discord med `command-setup.js` — se afsnittet
+ovenfor.
 
 #### Opsætning
 

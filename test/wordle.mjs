@@ -15,7 +15,8 @@ import {
 } from '../src/wordle.js';
 import {
     buildWordleNameIndex, wordlePuzzleDateKey,
-    formatWordleDay, formatWordleLeaderboard, fitWordleAnnouncement, wordleAverage
+    formatWordleDay, formatWordleLeaderboard, fitWordleAnnouncement, wordleAverage,
+    wordleSeasonSpan, formatWordleSeasonList, formatWordleSeasonEnd
 } from '../src/index.js';
 
 const failures = [];
@@ -170,6 +171,27 @@ ok('annonceringen indeholder stillingen', announcement.includes('Wordle leaderbo
 const squeezed = fitWordleAnnouncement(dayText, standings, [...dayText[0]].length + 10);
 check('under pres står dagen tilbage', squeezed, dayText[0]);
 ok('en umulig grænse giver stadig en besked', fitWordleAnnouncement(dayText, standings, 1) === dayText[0]);
+
+// --- Sæsoner ---
+
+check('sæsonens spænd er første og sidste dag', wordleSeasonSpan(['2026-09-14', '2026-09-12', '2026-09-13']),
+    { from: '2026-09-12', to: '2026-09-14', days: 3 });
+check('en sæson uden dage har intet spænd', wordleSeasonSpan([]), { from: null, to: null, days: 0 });
+
+const seasonOne = { seasonId: 1, from: '2026-06-01', to: '2026-09-14', days: 106, standings };
+const seasonTwo = { seasonId: 2, from: '2026-09-15', to: '2026-09-17', days: 3 };
+const seasonList = formatWordleSeasonList([seasonOne], seasonTwo, names.byId);
+ok('sæsonlisten viser den arkiverede sæsons dage', seasonList.includes('**Season 1** — 2026-06-01 → 2026-09-14 (106 days)'));
+ok('sæsonlisten kroner vinderen', seasonList.includes(`👑 ${standings[0].name}`));
+ok('sæsonlisten viser den igangværende sæson', seasonList.includes('**Season 2** (current) — since 2026-09-15 (3 days)'));
+ok('en helt ny sæson uden dage',
+    formatWordleSeasonList([], { seasonId: 1, from: null, to: null, days: 0 }, null).includes('(current) — no days yet'));
+
+const seasonEnd = formatWordleSeasonEnd(seasonOne, names.byId);
+ok('sæsonafslutningen viser den endelige stilling', seasonEnd.includes('season 1 is over') && seasonEnd.includes(standings[0].name));
+ok('sæsonafslutningen annoncerer den næste', seasonEnd.includes('Season 2 starts now'));
+ok('sæsonafslutningen holder sig under Discords grænse', [...seasonEnd].length <= 2000);
+check('en gammel sæsons stilling får sin egen overskrift', formatWordleLeaderboard(standings, 1, 'T').split('\n')[0], 'T');
 
 if (failures.length) {
     console.error(`❌ ${failures.length} fejl:\n  - ${failures.join('\n  - ')}`);

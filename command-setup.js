@@ -48,7 +48,14 @@ const ALL_COMMANDS = [
         type: 1,
         options: [{ name: "player", description: "Whose history to see (default: yourself)", type: 6, required: false }]
     },
-    { name: "wordle-ranking", description: "Wordle: see the leaderboard", type: 1 },
+    {
+        name: "wordle-ranking",
+        description: "Wordle: see the leaderboard",
+        type: 1,
+        options: [{ name: "season", description: "A past season to see (default: the current one)", type: 4, required: false }]
+    },
+    { name: "wordle-seasons", description: "Wordle: see every season so far", type: 1 },
+    { name: "wordle-reset-season", description: "Admin: end the Wordle season and start a new one", type: 1 },
     {
         name: "wordle-stats",
         description: "Wordle: see a player's stats",
