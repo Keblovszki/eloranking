@@ -3,7 +3,7 @@ import { MongoClient } from "mongodb";
 import { computeRoll, tierEmoji, MAX_ROLL } from "./rngdle.js";
 import {
     WORDLE_APP_ID, WORDLE_START_RATING,
-    parseWordleMessage, wordleEloUpdates, wordleStatsIncrement, wordleScoreLabel
+    hasWordleResultLines, parseWordleMessage, wordleEloUpdates, wordleStatsIncrement, wordleScoreLabel
 } from "./wordle.js";
 
 const DB_ELO_NAME = "EloRanking";
@@ -2192,9 +2192,9 @@ const WORDLE_DAYS_COLLECTION = "WordleDays";
 const WORDLE_PLAYERS_COLLECTION = "WordlePlayers";
 
 // Wordle-appen poster mellem 07:00 og 09:00 i København, men tidspunktet
-// varierer. Vi læser derfor kl. 10, hvor beskeden er der med sikkerhed, og
-// henter 50 beskeder tilbage, så en dag ikke går tabt hvis et cron-tick fejler.
-const WORDLE_ANNOUNCE_HOUR = 10;
+// varierer. Cron'en kigger derfor hvert 5. minut hen over morgenen (se
+// wrangler.toml), så stillingen kommer lige efter appens besked. Vi henter 50
+// beskeder tilbage, så en dag ikke går tabt hvis et cron-tick fejler.
 const WORDLE_HISTORY_LIMIT = 50;
 const WORDLE_LEADERBOARD_LIMIT = 15;
 
@@ -2339,15 +2339,12 @@ async function applyWordleDay(db, channelId, day, namesById) {
 }
 
 // Læser Wordle-appens beskeder, gemmer de dage vi ikke har set før, og annoncerer
-// den nyeste sammen med stillingen.
+// den nyeste sammen med stillingen. Kører på hvert cron-tick og gør kun noget når
+// der ligger en ny eller uafregnet dag, så en dag annonceres præcis én gang.
 async function ingestWordleResults(env) {
     if (!env.DISCORD_BOT_TOKEN || !env.WORDLE_CHANNEL_ID || !env.MONGODB_URI) return;
-    if (getCopenhagenParts(new Date()).hour !== WORDLE_ANNOUNCE_HOUR) return;
 
-    const names = await fetchWordleNameIndex(env, await fetchChannelGuildId(env, env.WORDLE_CHANNEL_ID));
-    if (!names) return;
-
-    const messages = await fetchWordleMessages(env);
+    const messages = (await fetchWordleMessages(env)).filter(m => hasWordleResultLines(m.content));
     if (messages.length === 0) return;
 
     const client = new MongoClient(env.MONGODB_URI, MONGO_TIMEOUTS);
@@ -2362,6 +2359,20 @@ async function ingestWordleResults(env) {
         const days = await db.collection(WORDLE_DAYS_COLLECTION)
             .find({ channelId: env.WORDLE_CHANNEL_ID, eloApplied: false })
             .sort({ dateKey: 1 }).toArray();
+
+        // De fleste tick finder ingen ny dag. Medlemslisten hentes først når der
+        // er noget at afregne, så de tomme tick koster ét Discord-kald og to
+        // databaseopslag.
+        const seen = new Set((await db.collection(WORDLE_DAYS_COLLECTION)
+            .find(
+                { channelId: env.WORDLE_CHANNEL_ID, dateKey: { $in: messages.map(m => wordlePuzzleDateKey(m.timestamp)) } },
+                { projection: { dateKey: 1 } }
+            ).toArray()).map(d => d.dateKey));
+        const hasNewDay = messages.some(m => !seen.has(wordlePuzzleDateKey(m.timestamp)));
+        if (days.length === 0 && !hasNewDay) return;
+
+        const names = await fetchWordleNameIndex(env, await fetchChannelGuildId(env, env.WORDLE_CHANNEL_ID));
+        if (!names) return;
 
         for (const message of messages) {
             const parsed = parseWordleMessage(message.content, names.byName);
