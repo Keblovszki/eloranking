@@ -259,8 +259,10 @@ antal forsøg, med kronen på dagens bedste:
 X/6: @Grejbar
 ```
 
-Botten læser den besked kl. 10 (København), gemmer dagen og poster dagens point
-plus stillingen. Der er ingen kommando spillerne skal huske, og derfor heller
+Botten kigger efter den besked hvert 5. minut om morgenen: 05:00–10:55 om vinteren og
+06:00–11:55 om sommeren (København). Så snart en ny dag ligger der, gemmer den dagen og poster dagens point plus
+stillingen — typisk få minutter efter Wordle-appen. Kommer beskeden først senere, tages
+dagen med næste morgen. Der er ingen kommando spillerne skal huske, og derfor heller
 ikke noget at snyde med: tallene kommer fra Wordle.
 
 | Kommando                | Hvad den gør                                                        |

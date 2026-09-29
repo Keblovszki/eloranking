@@ -71,6 +71,12 @@ export function parseWordlePlayers(rest, nameIndex) {
     return players;
 }
 
+// Om beskeden har resultatlinjer, uden at slå nogen deltagere op. Cron'en bruger
+// det til at se om der ligger en ny dag, før den henter serverens medlemsliste.
+export function hasWordleResultLines(content) {
+    return !!content && content.split('\n').some(line => RESULT_LINE.test(line));
+}
+
 // Læser én dagsbesked. Returnerer null hvis beskeden ikke er et dagsresultat —
 // Wordle-appen poster også andet i kanalen. guesses er 1-6, eller
 // WORDLE_FAILED_GUESSES for "X/6".

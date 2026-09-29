@@ -10,7 +10,7 @@
 //   node test/wordle.mjs
 
 import {
-    parseWordleMessage, wordleEloUpdates, wordleStatsIncrement,
+    hasWordleResultLines, parseWordleMessage, wordleEloUpdates, wordleStatsIncrement,
     wordleScoreLabel, WORDLE_FAILED_GUESSES, WORDLE_START_RATING
 } from '../src/wordle.js';
 import {
@@ -89,6 +89,12 @@ check('uden navneindeks får id-mentions stadig point', blind.results.length, 2)
 // besked i kanalen kunne lave en dag i databasen.
 check('en almindelig besked er ikke et dagsresultat', parseWordleMessage('7/6 er umuligt', names.byName), null);
 check('tom besked', parseWordleMessage('', names.byName), null);
+
+// Cron'en ser efter nye dage uden medlemslisten, så forhåndstjekket må hverken
+// overse en dag eller tage en almindelig besked for en.
+ok('et dagsresultat har resultatlinjer', hasWordleResultLines(DAY_17));
+ok('en almindelig besked har ingen resultatlinjer', !hasWordleResultLines('7/6 er umuligt'));
+ok('en tom besked har ingen resultatlinjer', !hasWordleResultLines(''));
 
 // Beskeden poster gårsdagens gåde, så dagen er dagen før beskeden — også når
 // beskeden kommer tidligt, og også hen over et månedsskifte.
