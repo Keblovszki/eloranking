@@ -156,6 +156,12 @@ export default {
                     data: { content: "You are banned from RNGdle.", flags: 64 }
                 });
             }
+            if (isWordleCommand && getBannedWordleIds(env).has(id)) {
+                return Response.json({
+                    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    data: { content: "You are banned from the Wordle ranking.", flags: 64 }
+                });
+            }
 
             // Discord kasserer svaret hvis der ikke er kommet et inden for 3
             // sekunder. Derfor kvitterer vi med det samme og redigerer beskeden
@@ -430,12 +436,13 @@ async function runCommand(interaction, env, ctx) {
                         return respondEphemeral(`There is no Wordle season **${seasonId}** — **/wordle-seasons** lists the ones there are.`);
                     }
                     const seasonNames = await fetchGuildDisplayNames(env, guild_id);
+                    const seasonStandings = withoutBannedWordlePlayers(season.standings, getBannedWordleIds(env));
                     return respondEphemeral(formatWordleLeaderboard(
-                        withCurrentNames(season.standings, seasonNames), WORDLE_LEADERBOARD_LIMIT, wordleSeasonTitle(season)
-                    ));
+                        withCurrentNames(seasonStandings, seasonNames), WORDLE_LEADERBOARD_LIMIT, wordleSeasonTitle(season)
+                    ) ?? `Nobody is left on the season ${season.seasonId} leaderboard.`);
                 }
 
-                const standings = await getWordleStandings(db, channel_id);
+                const standings = await getWordleStandings(db, channel_id, getBannedWordleIds(env));
                 const wordleNames = await fetchGuildDisplayNames(env, guild_id);
                 return respondEphemeral(
                     formatWordleLeaderboard(withCurrentNames(standings, wordleNames))
@@ -444,15 +451,16 @@ async function runCommand(interaction, env, ctx) {
             }
 
             case "wordle-seasons": {
-                const seasons = await getWordleSeasons(db, channel_id);
+                const bannedWordle = getBannedWordleIds(env);
+                const seasons = await getWordleSeasons(db, channel_id, bannedWordle);
                 const current = await currentWordleSeason(db, channel_id, seasons);
                 const listNames = await fetchGuildDisplayNames(env, guild_id);
-                return respondEphemeral(formatWordleSeasonList(seasons, current, listNames));
+                return respondEphemeral(formatWordleSeasonList(seasons, current, listNames, bannedWordle));
             }
 
             case "wordle-reset-season": {
                 if (id !== HANNIBAL_ID) return respond("Only admins can use this command!");
-                const season = await archiveWordleSeason(client, db, channel_id);
+                const season = await archiveWordleSeason(client, db, channel_id, getBannedWordleIds(env));
                 if (!season) return respond("There are no Wordle results to archive. The ranking is already empty.");
                 const resetNames = await fetchGuildDisplayNames(env, guild_id);
                 return respond(formatWordleSeasonEnd(season, resetNames));
@@ -460,7 +468,9 @@ async function runCommand(interaction, env, ctx) {
 
             case "wordle-stats": {
                 const targetId = options?.find(o => o.name === "player")?.value ?? id;
-                const player = await db.collection(WORDLE_PLAYERS_COLLECTION)
+                // En bandlyst kan ikke slås op: svaret er det samme som for en
+                // der aldrig har spillet.
+                const player = getBannedWordleIds(env).has(targetId) ? null : await db.collection(WORDLE_PLAYERS_COLLECTION)
                     .findOne({ channelId: channel_id, playerId: targetId });
                 if (!player) {
                     return respondEphemeral(targetId === id
@@ -479,7 +489,8 @@ async function runCommand(interaction, env, ctx) {
                 if (!day) return respondEphemeral("No Wordle day has been recorded yet.");
 
                 const dayNames = await fetchGuildDisplayNames(env, guild_id);
-                return respondEphemeral(formatWordleDay(day, day.updates, dayNames).join('\n\n'));
+                const dayUpdates = withoutBannedWordlePlayers(day.updates, getBannedWordleIds(env));
+                return respondEphemeral(formatWordleDay(day, dayUpdates, dayNames).join('\n\n'));
             }
 
             // --- RANKING OG BRUGER COMMANDS ---
@@ -2198,6 +2209,17 @@ const WORDLE_PLAYERS_COLLECTION = "WordlePlayers";
 const WORDLE_HISTORY_LIMIT = 50;
 const WORDLE_LEADERBOARD_LIMIT = 15;
 
+// Bandlyste spillere står som kommasepareret liste af Discord-bruger-ID'er i
+// wrangler.toml, ligesom RNGDLE_BANNED_IDS. Tom streng = ingen bandlyste.
+function getBannedWordleIds(env) {
+    return new Set((env.WORDLE_BANNED_IDS ?? "").split(',').map(s => s.trim()).filter(Boolean));
+}
+
+// Virker på dagens resultater, stillingen og arkiverede sæsoner: alle har playerId.
+export function withoutBannedWordlePlayers(entries, bannedIds) {
+    return bannedIds?.size ? entries.filter(e => !bannedIds.has(e.playerId)) : entries;
+}
+
 // Ét dagsdokument pr. kanal pr. dag. Det unikke indeks er det der faktisk
 // håndhæver reglen — to samtidige cron-tick kan ikke begge indlæse samme dag.
 let wordleDayIndexEnsured = null;
@@ -2286,15 +2308,22 @@ async function claimWordleDay(db, channelId, day) {
 // Afregner én dag: point og statistik til alle deltagere. Flaget sættes
 // allersidst, så en dag der går i stykken midtvejs bliver taget med næste gang
 // i stedet for at være tabt.
-async function applyWordleDay(db, channelId, day, namesById) {
-    const ids = day.results.map(r => r.playerId);
+//
+// Bandlyste tages ud før udregningen, ikke bagefter: en snyder skal hverken få
+// point eller tage point fra dem vedkommende slog. Dagsdokumentets results
+// bevarer hele feltet, som Wordle skrev det.
+async function applyWordleDay(db, channelId, day, namesById, bannedIds) {
+    const results = withoutBannedWordlePlayers(day.results, bannedIds);
+    const ids = results.map(r => r.playerId);
     const existing = await db.collection(WORDLE_PLAYERS_COLLECTION)
         .find({ channelId, playerId: { $in: ids } }).toArray();
     const ratings = new Map(existing.map(p => [p.playerId, p.rating]));
 
-    const updates = wordleEloUpdates(day.results, playerId => ratings.get(playerId) ?? WORDLE_START_RATING);
+    const updates = wordleEloUpdates(results, playerId => ratings.get(playerId) ?? WORDLE_START_RATING);
 
-    await db.collection(WORDLE_PLAYERS_COLLECTION).bulkWrite(updates.map(u => {
+    // bulkWrite afviser en tom liste, og en dag med kun bandlyste har ingen at
+    // give point.
+    if (updates.length > 0) await db.collection(WORDLE_PLAYERS_COLLECTION).bulkWrite(updates.map(u => {
         const inc = wordleStatsIncrement(u);
         return {
             updateOne: {
@@ -2383,17 +2412,19 @@ async function ingestWordleResults(env) {
             if (claimed) days.push(claimed);
         }
 
+        const banned = getBannedWordleIds(env);
         let newest = null;
         for (const day of days.sort((a, b) => a.dateKey.localeCompare(b.dateKey))) {
             if (day.unresolved?.length) {
                 console.log(`Wordle ${day.dateKey}: kunne ikke genkende ${day.unresolved.join(', ')}`);
             }
-            newest = { day, updates: await applyWordleDay(db, env.WORDLE_CHANNEL_ID, day, names.byId) };
+            newest = { day, updates: await applyWordleDay(db, env.WORDLE_CHANNEL_ID, day, names.byId, banned) };
         }
-        if (!newest) return;
+        // En dag med kun bandlyste har intet at annoncere.
+        if (!newest?.updates.length) return;
 
         const standings = withCurrentNames(
-            await getWordleStandings(db, env.WORDLE_CHANNEL_ID), names.byId
+            await getWordleStandings(db, env.WORDLE_CHANNEL_ID, banned), names.byId
         );
         announcement = fitWordleAnnouncement(formatWordleDay(newest.day, newest.updates, names.byId), standings);
     } finally {
@@ -2409,9 +2440,11 @@ async function ingestWordleResults(env) {
     });
 }
 
-async function getWordleStandings(db, channelId) {
+async function getWordleStandings(db, channelId, bannedIds) {
+    const filter = { channelId };
+    if (bannedIds?.size) filter.playerId = { $nin: [...bannedIds] };
     return db.collection(WORDLE_PLAYERS_COLLECTION)
-        .find({ channelId })
+        .find(filter)
         .sort({ rating: -1, wins: -1 })
         .toArray();
 }
@@ -2432,10 +2465,11 @@ export function wordleAverage(player) {
 const WORDLE_SEASONS_COLLECTION = "WordleSeasons";
 
 // Stillingen udelades: listen skal kun vise vinderen, og en sæsons stilling er
-// det tungeste i dokumentet.
-async function getWordleSeasons(db, channelId) {
+// det tungeste i dokumentet. Der hentes én række ekstra pr. bandlyst, så der
+// stadig er en vinder tilbage når de bandlyste er sorteret fra.
+async function getWordleSeasons(db, channelId, bannedIds) {
     return db.collection(WORDLE_SEASONS_COLLECTION)
-        .find({ channelId }, { projection: { standings: { $slice: 1 } } })
+        .find({ channelId }, { projection: { standings: { $slice: 1 + (bannedIds?.size ?? 0) } } })
         .sort({ seasonId: 1 })
         .toArray();
 }
@@ -2460,10 +2494,10 @@ export function wordleSeasonSpan(dateKeys) {
 
 // Arkiv og sletning sker i én transaktion, så en fejl midtvejs ikke efterlader
 // sæsonen både gemt og igangværende. Null når der ikke er nogen at arkivere.
-async function archiveWordleSeason(client, db, channelId) {
+async function archiveWordleSeason(client, db, channelId, bannedIds) {
     const seasons = await getWordleSeasons(db, channelId);
     const current = await currentWordleSeason(db, channelId, seasons);
-    const standings = await getWordleStandings(db, channelId);
+    const standings = await getWordleStandings(db, channelId, bannedIds);
     if (standings.length === 0) return null;
 
     const season = {
@@ -2495,10 +2529,10 @@ function wordleSeasonDays(season) {
     return `${season.days} ${season.days === 1 ? 'day' : 'days'}`;
 }
 
-export function formatWordleSeasonList(seasons, current, namesById) {
+export function formatWordleSeasonList(seasons, current, namesById, bannedIds) {
     const lines = seasons.map(s => {
         const span = s.days ? `${s.from} → ${s.to} (${wordleSeasonDays(s)})` : 'no days';
-        const winner = s.standings?.[0];
+        const winner = withoutBannedWordlePlayers(s.standings ?? [], bannedIds)[0];
         const crown = winner ? ` — 👑 ${namesById?.get(winner.playerId) ?? winner.name}` : '';
         return `**Season ${s.seasonId}** — ${span}${crown}`;
     });

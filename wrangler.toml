@@ -13,6 +13,10 @@ RNGDLE_BANNED_IDS = ""
 # Kanalen hvor Wordle-appen poster gruppens dagsresultat. Tom = Wordle-ranglisten
 # er slået helt fra.
 WORDLE_CHANNEL_ID = "1542777817467457588"
+# Kommaseparerede Discord-bruger-ID'er der er bandlyst fra Wordle-ranglisten: de
+# tages ud af dagens resultat før pointene regnes, og de er ude af stillingen.
+# Tom = ingen er bandlyst. Deploy efter ændring.
+WORDLE_BANNED_IDS = ""
 
 # Cron is always UTC, and Copenhagen alternates between UTC+1 (CET) and UTC+2
 # (CEST) across the year — so each Copenhagen hour needs two entries, and each
