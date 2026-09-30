@@ -183,7 +183,7 @@ export default {
 // på listen: den er offentlig i det almindelige tilfælde, og sendReply klarer
 // det ephemerale "du har allerede rullet i dag".
 export const EPHEMERAL_COMMANDS = new Set([
-    "roll-ranking", "roll-stats", "roll-history", "bet", "team-name", "team-list",
+    "roll-ranking", "roll-stats", "roll-history", "bet", "team-name", "team-list", "random-teams",
     "wordle-ranking", "wordle-stats", "wordle-day", "wordle-seasons"
 ]);
 
@@ -892,6 +892,44 @@ async function runCommand(interaction, env, ctx) {
                     await db.collection(GAMES_COLLECTION).updateOne({ _id: cGame._id }, { $set: { status: "cancelled" }});
                     return respond(`${global_name}'s game has been cancelled.`);
                 }
+
+            // Står bevidst ikke i /help. Kun kampe fra /play der blev spillet
+            // færdig tæller, og kun med de hold de endte med efter rerolls.
+            case "random-teams": {
+                const rtSeasonId = options?.find(o => o.name === "season")?.value;
+                const rtEnds = await getEloSeasonEnds(db, channel_id);
+                const rtCurrent = seasonAt(new Date(), rtEnds);
+                if (rtSeasonId !== undefined && (rtSeasonId < 1 || rtSeasonId > rtCurrent)) {
+                    return respondEphemeral(`There is no season **${rtSeasonId}**. The current season is **${rtCurrent}**.`);
+                }
+
+                const rtGames = (await db.collection(GAMES_COLLECTION)
+                    .find({ channelId: channel_id, isRandom: true, status: "ended" }).toArray())
+                    .map(g => ({ ...g, seasonId: seasonAt(g._id.getTimestamp(), rtEnds) }));
+                const rtNames = await fetchGuildDisplayNames(env, guild_id);
+                const rtSeasonLabel = s => `season ${s}${s === rtCurrent ? " (current)" : ""}`;
+                const rtGameCount = n => `${n} ${n === 1 ? "game" : "games"}`;
+
+                if (rtSeasonId !== undefined) {
+                    const rtInSeason = rtGames.filter(g => g.seasonId === rtSeasonId);
+                    return respondEphemeral(formatRandomTeams(
+                        `🎲 **Random teams — ${rtSeasonLabel(rtSeasonId)}** 🎲\n${rtGameCount(rtInSeason.length)} with **/play**`,
+                        countRandomTeams(rtInSeason), rtNames
+                    ));
+                }
+
+                const rtPerSeason = [];
+                for (let s = 1; s <= rtCurrent; s++) {
+                    const n = rtGames.filter(g => g.seasonId === s).length;
+                    if (n > 0) rtPerSeason.push(`Season ${s}: ${n}`);
+                }
+                return respondEphemeral(formatRandomTeams(
+                    `🎲 **Random teams — all seasons** 🎲\n${rtGameCount(rtGames.length)} with **/play**` +
+                    (rtPerSeason.length > 0 ? ` (${rtPerSeason.join(" · ")})` : "") +
+                    `\nSee one season with **/random-teams season:<number>**.`,
+                    countRandomTeams(rtGames), rtNames
+                ));
+            }
 
             // --- HOLDNAVNE ---
 
@@ -2175,6 +2213,65 @@ function getRerolledTeams([p1, p2, p3, p4]) {
     return Math.random() < 0.5
         ? [p1, p3, p2, p4]
         : [p1, p4, p2, p3];
+}
+
+// --- Tilfældige hold ---
+
+// Hvornår hver Elo-sæson sluttede. Kampene har intet sæsonnummer, så det er
+// arkiveringen i /reset-season der trækker grænsen. Sorteret efter seasonId.
+async function getEloSeasonEnds(db, channelId) {
+    return db.collection(PLAYERS_HISTORY_COLLECTION).aggregate([
+        { $match: { channelId } },
+        { $group: { _id: "$seasonId", endedAt: { $min: "$archivedAt" } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, seasonId: "$_id", endedAt: 1 } }
+    ]).toArray();
+}
+
+// Sæsonen der var i gang på tidspunktet: den første der sluttede bagefter, og
+// ellers den igangværende, som er nummeret efter den senest arkiverede.
+export function seasonAt(time, seasonEnds) {
+    const season = seasonEnds.find(s => time < s.endedAt);
+    return season ? season.seasonId : (seasonEnds.at(-1)?.seasonId ?? 0) + 1;
+}
+
+// Hvor mange gange hvert makkerpar er endt på hold sammen, flest først. Kun de
+// hold kampen blev spillet med tæller: en reroll overskriver opstillingen, så de
+// hold der blev rullet væk efterlader intet spor.
+export function countRandomTeams(games) {
+    const pairs = new Map();
+    for (const g of games) {
+        for (const team of [
+            [{ playerId: g.playerId1, name: g.playerName1 }, { playerId: g.playerId2, name: g.playerName2 }],
+            [{ playerId: g.playerId3, name: g.playerName3 }, { playerId: g.playerId4, name: g.playerName4 }]
+        ]) {
+            const key = teamPairKey(team[0].playerId, team[1].playerId);
+            const pair = pairs.get(key) ?? { players: team, count: 0 };
+            pair.count++;
+            pairs.set(key, pair);
+        }
+    }
+    return [...pairs.values()].sort((a, b) => b.count - a.count);
+}
+
+// Listen skæres nedefra, så den holder sig inden for én Discord-besked.
+export function formatRandomTeams(heading, pairs, namesById, limit = DISCORD_MESSAGE_LIMIT) {
+    const rows = pairs
+        .map(p => ({
+            count: p.count,
+            label: p.players.map(pl => currentName(namesById, pl.playerId, pl.name)).join(' & ')
+        }))
+        .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+        .map(r => `**${r.count}×** ${r.label}`);
+    if (rows.length === 0) return `${heading}\n\nNo random teams have been played yet.`;
+
+    const content = shown => {
+        const rest = rows.length - shown;
+        return `${heading}\n\n${rows.slice(0, shown).join('\n')}` + (rest > 0 ? `\n…and ${rest} more` : "");
+    };
+    let shown = rows.length;
+    while (shown > 1 && messageLength(content(shown)) > limit) shown--;
+    return content(shown);
 }
 
 function calculateEloRatingDifference(playerRating, opponentRating, score, K = 32) {

@@ -123,6 +123,18 @@ betyder bare "intet navn", så der er ikke noget at migrere.
 De tre kommandoer skal registreres i Discord med `command-setup.js` — se
 afsnittet ovenfor.
 
+## Tilfældige hold
+
+`/random-teams` viser hvor mange gange hvert makkerpar er endt på hold sammen i
+`/play`, flest først. Uden `season` tælles alle sæsoner, med `season:2` kun den
+ene. Kommandoen står bevidst ikke i `/help`, og svaret er ephemeral.
+
+Kun kampe der blev spillet færdig (`/accept`) tæller, og kun med de hold de endte
+med: en `/reroll` overskriver opstillingen, så de hold der blev rullet væk
+efterlader intet spor. Kampene har intet sæsonnummer, så en kamp hører til den
+sæson der var i gang da den blev oprettet — grænsen er hvornår `/reset-season`
+arkiverede sæsonen.
+
 ## Deploy til produktion
 
 ```bash
