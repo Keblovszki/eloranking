@@ -262,8 +262,8 @@ X/6: @Grejbar
 Botten kigger efter den besked hvert 5. minut om morgenen: 05:00–10:55 om vinteren og
 06:00–11:55 om sommeren (København). Så snart en ny dag ligger der, gemmer den dagen og poster dagens point plus
 stillingen — typisk få minutter efter Wordle-appen. Kommer beskeden først senere, tages
-dagen med næste morgen. Der er ingen kommando spillerne skal huske, og derfor heller
-ikke noget at snyde med: tallene kommer fra Wordle.
+dagen med næste morgen. Der er ingen kommando spillerne skal huske, og ingen kan
+skrive et resultat ind selv: tallene kommer fra Wordle.
 
 | Kommando                | Hvad den gør                                                        |
 | ----------------------- | ------------------------------------------------------------------- |
@@ -321,6 +321,33 @@ over og prøves igen næste dag — en halv dag gemmes aldrig.
 Vil du se en rigtig besked, som botten ser den, kør `node test/wordle-probe.mjs`.
 Den spørger om bot-tokenet, skjuler det mens det tastes, og lægger svaret i
 `test/wordle-dump.json` (git-ignoreret).
+
+#### Bandlys en snyder
+
+Tallene kommer fra Wordle, men Wordle kan ikke se om nogen har slået ordet op først. Sæt
+`WORDLE_BANNED_IDS` i `wrangler.toml` til en kommasepareret liste af Discord-bruger-ID'er
+(højreklik på brugeren i Discord -> **Kopiér bruger-ID**) og deploy med `npx wrangler deploy`.
+
+```toml
+WORDLE_BANNED_IDS = "123456789012345678,987654321098765432"
+```
+
+En bandlyst bruger:
+
+- tages ud af dagens resultat **før** pointene regnes, så de andre hverken taber point til
+  vedkommende eller får point for at slå vedkommende
+- filtreres ud af stillingen, dagsannonceringen og `/wordle-day`
+- kan ikke slås op: `/wordle-stats` svarer som var der ingen resultater
+- står ikke i en arkiveret sæson, og mister kronen i `/wordle-seasons` til den næstbedste
+- får afvist alle Wordle-kommandoerne
+
+Modsat RNGdle kan en bandlyst stadig skrive i Wordle-kanalen: det er kun ranglisten,
+vedkommende er ude af.
+
+Bandlysningen virker fremad. Point der allerede er flyttet på dage hvor snyderen var med,
+bliver stående hos de andre; dagsdokumenterne i `WordleDays` gemmer stadig hele feltet, som
+Wordle skrev det. Fjernes et ID fra listen igen, er spilleren tilbage i stillingen med den
+rating vedkommende havde da bandlysningen kom.
 
 Peg til sidst din Discord-apps **Interactions Endpoint URL** hen på din deployede Worker-URL.
 

@@ -1,7 +1,7 @@
 // Wordle-ranglisten. Wordle-appen poster selv gruppens resultat hver morgen —
 // "Here are yesterday's results:" efterfulgt af én linje pr. antal forsøg — og
 // det er den besked vi læser. Der er ingen kommando spillerne skal huske, og
-// derfor heller ikke noget at snyde med: tallene kommer fra Wordle, ikke fra os.
+// ingen kan skrive et resultat ind selv: tallene kommer fra Wordle, ikke fra os.
 //
 // Alt i denne fil er rene funktioner uden database og uden netværk, så hele
 // fortolkningen og pointudregningen kan testes mod en rigtig besked

@@ -16,7 +16,7 @@ import {
 import {
     buildWordleNameIndex, wordlePuzzleDateKey,
     formatWordleDay, formatWordleLeaderboard, fitWordleAnnouncement, wordleAverage,
-    wordleSeasonSpan, formatWordleSeasonList, formatWordleSeasonEnd
+    wordleSeasonSpan, formatWordleSeasonList, formatWordleSeasonEnd, withoutBannedWordlePlayers
 } from '../src/index.js';
 
 const failures = [];
@@ -192,6 +192,21 @@ ok('sæsonlisten kroner vinderen', seasonList.includes(`👑 ${standings[0].name
 ok('sæsonlisten viser den igangværende sæson', seasonList.includes('**Season 2** (current) — since 2026-09-15 (3 days)'));
 ok('en helt ny sæson uden dage',
     formatWordleSeasonList([], { seasonId: 1, from: null, to: null, days: 0 }, null).includes('(current) — no days yet'));
+
+// --- Bandlysning ---
+
+// En snyder skal tages ud af dagen før udregningen, så de andre hverken taber
+// point til vedkommende eller får point for at slå vedkommende.
+const cheater = day18.results[0].playerId;
+const banned = new Set([cheater]);
+const fairDay = withoutBannedWordlePlayers(day18.results, banned);
+ok('den bandlyste er ude af dagen', !fairDay.some(r => r.playerId === cheater));
+check('de andre er stadig med', fairDay.length, day18.results.length - 1);
+check('uden bandlyste er listen urørt', withoutBannedWordlePlayers(day18.results, new Set()), day18.results);
+
+const bannedWinnerList = formatWordleSeasonList([seasonOne], seasonTwo, names.byId, new Set([standings[0].playerId]));
+ok('en bandlyst vinder mister kronen', !bannedWinnerList.includes(`👑 ${standings[0].name}`));
+ok('kronen går videre til næstbedste', bannedWinnerList.includes(`👑 ${standings[1].name}`));
 
 const seasonEnd = formatWordleSeasonEnd(seasonOne, names.byId);
 ok('sæsonafslutningen viser den endelige stilling', seasonEnd.includes('season 1 is over') && seasonEnd.includes(standings[0].name));
