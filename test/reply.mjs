@@ -15,7 +15,7 @@ import {
     teamPairKey, normalizeTeamName, teamHeading,
     makePercentileLookup, formatPercentileShort, formatRngdleHistory,
     recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement,
-    seasonAt, countRandomTeams, formatRandomTeams
+    seasonAt, countRandomTeams, formatRandomTeams, resolvedUser
 } from '../src/index.js';
 
 const failures = [];
@@ -375,6 +375,23 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     const fitted = formatRandomTeams('H', many, null);
     check('lang liste holder sig under grænsen', [...fitted].length <= 2000, true);
     check('halelinjen tæller de skårne', /\n…and \d+ more$/.test(fitted), true);
+}
+
+// Makkeren i /play-double kommer på ranglisten med det navn Discord sender med
+// i data.resolved: nick foran globalt navn foran username.
+{
+    const interaction = { data: { resolved: {
+        users: {
+            nick: { id: 'nick', username: 'u1', global_name: 'Global' },
+            plain: { id: 'plain', username: 'u2' },
+            robot: { id: 'robot', username: 'bot', bot: true }
+        },
+        members: { nick: { nick: 'Nick' }, plain: {} }
+    } } };
+    check('nick vinder', resolvedUser(interaction, 'nick'), { bot: false, name: 'Nick' });
+    check('uden nick og globalt navn bruges username', resolvedUser(interaction, 'plain'), { bot: false, name: 'u2' });
+    check('en bot kendes', resolvedUser(interaction, 'robot').bot, true);
+    check('ukendt bruger', resolvedUser(interaction, 'nobody'), null);
 }
 
 if (failures.length) {
