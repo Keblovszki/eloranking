@@ -499,10 +499,7 @@ async function runCommand(interaction, env, ctx) {
                 const playerJoinCount = await db.collection(PLAYERS_COLLECTION).countDocuments({ playerId: id, channelId: channel_id });
                 if (playerJoinCount > 0) return respond("You have already joined the ranking!");
 
-                await db.collection(PLAYERS_COLLECTION).insertOne({
-                    name: global_name, playerId: id, singleRanking: 1000, doubleRanking: 1000,
-                    wins: 0, loses: 0, winningStreak: 0, losingStreak: 0, channelId: channel_id, admin: false,
-                });
+                await db.collection(PLAYERS_COLLECTION).insertOne({ ...newPlayerFields(global_name), playerId: id, channelId: channel_id });
                 return respond(`${global_name} has just joined the ranking! To see the ranking you can use the **/single-ranking** or **/double-ranking** commands.`);
 
             case "single-ranking":
@@ -596,8 +593,7 @@ async function runCommand(interaction, env, ctx) {
             // --- MATCHMAKING COMMANDS ---
 
             case "play-single":
-                const sPlayer = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
-                if (!sPlayer) return respond(`${global_name} has not joined the ranking yet. Use **/join-ranking**.`);
+                const sPlayer = await getOrCreatePlayer(db, channel_id, id, global_name);
 
                 const sActive = await db.collection(GAMES_COLLECTION).findOne({
                     status: { $in: ["pending", "started", "result"] }, channelId: channel_id,
@@ -617,8 +613,7 @@ async function runCommand(interaction, env, ctx) {
                 const creatorId = options[0].value;
                 if (creatorId === id) return respond("You can't accept your own challenge. Please go find some friends...");
 
-                const challenger = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
-                if (!challenger) return respond("You have not joined the ranking yet.");
+                const challenger = await getOrCreatePlayer(db, channel_id, id, global_name);
 
                 const cActive = await db.collection(GAMES_COLLECTION).findOne({
                     status: { $in: ["pending", "started", "result"] }, channelId: channel_id,
@@ -637,14 +632,13 @@ async function runCommand(interaction, env, ctx) {
                 return respond(`A single game is created between: \n<@${sGame.playerId1}> (elo: ${blindSet?.isBlind ? "???" : sGame.teamElo1}) \n<@${sGame.playerId2}> (elo: ${blindSet?.isBlind ? "???" : sGame.teamElo2}) \n\nHave a nice game!!`);
 
             case "play-double":
-                const dPlayer = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
-                if (!dPlayer) return respond("You have not joined the ranking yet.");
+                const dPlayer = await getOrCreatePlayer(db, channel_id, id, global_name);
 
                 const partnerId = options[0].value;
                 if (partnerId === id) return respond("You can not play a game with yourself.");
 
                 const partner = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: partnerId, channelId: channel_id });
-                if (!partner) return respond("Your partner has not joined the ranking yet.");
+                if (!partner) return respond("Your partner is not on the ranking yet. They join the first time they play, or with **/join-ranking**.");
 
                 const dActive = await db.collection(GAMES_COLLECTION).findOne({
                     status: { $in: ["pending", "started", "result"] }, channelId: channel_id,
@@ -667,14 +661,13 @@ async function runCommand(interaction, env, ctx) {
                 return respond(`<@${dPlayer.playerId}> and <@${partner.playerId}>${dTeamName ? ` (**${dTeamName}**)` : ""} (elo: ${dBlind?.isBlind ? "???" : teamElo}) have created a game. Now someone else has to accept the challenge!`);
 
             case "double-accepted":
-                const daPlayer = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
-                if (!daPlayer) return respond("You have not joined the ranking yet.");
+                const daPlayer = await getOrCreatePlayer(db, channel_id, id, global_name);
 
                 const daPartnerId = options[0].value;
                 if (daPartnerId === id) return respond("You can not play a game with yourself.");
 
                 const daPartner = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: daPartnerId, channelId: channel_id });
-                if (!daPartner) return respond("Your partner has not joined the ranking yet.");
+                if (!daPartner) return respond("Your partner is not on the ranking yet. They join the first time they play, or with **/join-ranking**.");
 
                 const daCreatorId = options[1].value;
 
@@ -702,8 +695,7 @@ async function runCommand(interaction, env, ctx) {
 
             case "play":
                 // Double-random logik
-                const prPlayer = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
-                if (!prPlayer) return respond("You have not joined the ranking yet.");
+                const prPlayer = await getOrCreatePlayer(db, channel_id, id, global_name);
 
                 const prActive = await db.collection(GAMES_COLLECTION).findOne({
                     status: { $in: ["pending", "started", "result"] }, channelId: channel_id,
@@ -774,8 +766,7 @@ async function runCommand(interaction, env, ctx) {
                 // slash-kommandoens parametre (fx team:1) offentligt i headeren
                 // over svaret — også på fejlbeskeder. Så ingen kan se hvilket
                 // hold nogen har bettet på, før /accept afslører det.
-                const btPlayer = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: id, channelId: channel_id });
-                if (!btPlayer) return respondEphemeral("You have not joined the ranking yet.");
+                const btPlayer = await getOrCreatePlayer(db, channel_id, id, global_name);
 
                 const btTeam = options.find(o => o.name === "team").value;
                 const btMatchOption = options.find(o => o.name === "match");
@@ -1181,7 +1172,7 @@ async function runCommand(interaction, env, ctx) {
             case "help":
                 return respond(
                     "**HOW TO PLAY**\n" +
-                    `Before you start, you have to join the system by typing: **/join-ranking**.\n\n` +
+                    `You join the ranking the first time you play or bet. Want to be on the list before that? Type: **/join-ranking**.\n\n` +
                     "With this system you can play singles, doubles and doubles with a random partner. \n\n" +
                     "**SINGLE**\n" +
                     `To start a single type: **/play-single**.\n` +
@@ -1227,6 +1218,27 @@ async function runCommand(interaction, env, ctx) {
         // Databasen lukkes sikkert
         await client.close();
     }
+}
+
+// --- Spillere ---
+
+// En ny spiller på ranglisten. playerId og channelId kommer fra opslaget.
+function newPlayerFields(name) {
+    return {
+        name, singleRanking: 1000, doubleRanking: 1000,
+        wins: 0, loses: 0, winningStreak: 0, losingStreak: 0, admin: false,
+    };
+}
+
+// Man kommer på ranglisten første gang man spiller eller vædder. /join-ranking
+// er til dem der vil stå på listen uden at have spillet. $setOnInsert rører
+// ikke en spiller der allerede er med.
+async function getOrCreatePlayer(db, channelId, playerId, name) {
+    return db.collection(PLAYERS_COLLECTION).findOneAndUpdate(
+        { playerId, channelId },
+        { $setOnInsert: newPlayerFields(name) },
+        { upsert: true, returnDocument: 'after' }
+    );
 }
 
 // --- Navne ---
