@@ -637,8 +637,10 @@ async function runCommand(interaction, env, ctx) {
                 const partnerId = options[0].value;
                 if (partnerId === id) return respond("You can not play a game with yourself.");
 
-                const partner = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: partnerId, channelId: channel_id });
-                if (!partner) return respond("Your partner is not on the ranking yet. They join the first time they play, or with **/join-ranking**.");
+                const partnerUser = resolvedUser(interaction, partnerId);
+                if (!partnerUser) return respond("Could not find your partner.");
+                if (partnerUser.bot) return respond("You can not play a game with a bot.");
+                const partner = await getOrCreatePlayer(db, channel_id, partnerId, partnerUser.name);
 
                 const dActive = await db.collection(GAMES_COLLECTION).findOne({
                     status: { $in: ["pending", "started", "result"] }, channelId: channel_id,
@@ -666,8 +668,10 @@ async function runCommand(interaction, env, ctx) {
                 const daPartnerId = options[0].value;
                 if (daPartnerId === id) return respond("You can not play a game with yourself.");
 
-                const daPartner = await db.collection(PLAYERS_COLLECTION).findOne({ playerId: daPartnerId, channelId: channel_id });
-                if (!daPartner) return respond("Your partner is not on the ranking yet. They join the first time they play, or with **/join-ranking**.");
+                const daPartnerUser = resolvedUser(interaction, daPartnerId);
+                if (!daPartnerUser) return respond("Could not find your partner.");
+                if (daPartnerUser.bot) return respond("You can not play a game with a bot.");
+                const daPartner = await getOrCreatePlayer(db, channel_id, daPartnerId, daPartnerUser.name);
 
                 const daCreatorId = options[1].value;
 
@@ -1230,9 +1234,9 @@ function newPlayerFields(name) {
     };
 }
 
-// Man kommer på ranglisten første gang man spiller eller vædder. /join-ranking
-// er til dem der vil stå på listen uden at have spillet. $setOnInsert rører
-// ikke en spiller der allerede er med.
+// Man kommer på ranglisten første gang man spiller, vædder eller bliver valgt
+// som makker i en double. /join-ranking er til dem der vil stå på listen uden
+// at have spillet. $setOnInsert rører ikke en spiller der allerede er med.
 async function getOrCreatePlayer(db, channelId, playerId, name) {
     return db.collection(PLAYERS_COLLECTION).findOneAndUpdate(
         { playerId, channelId },
@@ -1247,6 +1251,15 @@ async function getOrCreatePlayer(db, channelId, playerId, name) {
 // det unikke username. Vi vil have det folk hedder i kanalen, så nick vinder.
 function memberDisplayName(member) {
     return member.nick || member.user.global_name || member.user.username;
+}
+
+// En bruger fra en kommando-option, fx makkeren i /play-double. Discord sender
+// brugeren og medlemskabet i kanalens server hver for sig i data.resolved.
+export function resolvedUser(interaction, userId) {
+    const user = interaction.data.resolved?.users?.[userId];
+    if (!user) return null;
+    const member = interaction.data.resolved?.members?.[userId];
+    return { bot: Boolean(user.bot), name: memberDisplayName({ ...member, user }) };
 }
 
 // Ranglisterne viser hvad folk hedder LIGE NU. Navnet på spilleren i databasen er
