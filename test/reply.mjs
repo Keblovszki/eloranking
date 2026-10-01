@@ -14,7 +14,8 @@ import {
     sendReply, buildRatingUpdate, EPHEMERAL_COMMANDS,
     teamPairKey, normalizeTeamName, teamHeading,
     makePercentileLookup, formatPercentileShort, formatRngdleHistory,
-    recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement
+    recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement,
+    seasonAt, countRandomTeams, formatRandomTeams
 } from '../src/index.js';
 
 const failures = [];
@@ -342,6 +343,38 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     const tight = fitRngdleAnnouncement(sections, ids, standings, length(sections.slice(0, 2).join('\n\n')) + 5);
     check('uden plads til stillingen står podiet tilbage', tight, sections.slice(0, 2).join('\n\n'));
     check('uden stilling falder vi tilbage til sektionerne', fitRngdleAnnouncement(sections, ids, [], 100000), [...sections, everyone].join('\n\n'));
+}
+
+// Tilfældige hold: parret tælles uanset rækkefølge og uanset hvilket hold det
+// stod på, og en kamp hører til sæsonen der var i gang da den blev oprettet.
+{
+    const game = (a, b, c, d) => ({
+        playerId1: a, playerName1: a.toUpperCase(), playerId2: b, playerName2: b.toUpperCase(),
+        playerId3: c, playerName3: c.toUpperCase(), playerId4: d, playerName4: d.toUpperCase()
+    });
+    const pairs = countRandomTeams([game('a', 'b', 'c', 'd'), game('b', 'a', 'd', 'c'), game('c', 'd', 'a', 'b'), game('a', 'c', 'b', 'd')]);
+    const counts = Object.fromEntries(pairs.map(p => [p.players.map(pl => pl.playerId).sort().join(''), p.count]));
+    check('et par tælles uanset rækkefølge og hold', counts, { ab: 3, cd: 3, ac: 1, bd: 1 });
+    check('flest først', pairs.map(p => p.count), [3, 3, 1, 1]);
+
+    const ends = [{ seasonId: 1, endedAt: new Date('2026-03-01') }, { seasonId: 2, endedAt: new Date('2026-06-01') }];
+    check('før første arkivering er sæson 1', seasonAt(new Date('2026-01-15'), ends), 1);
+    check('mellem to arkiveringer', seasonAt(new Date('2026-04-15'), ends), 2);
+    check('efter sidste arkivering er den igangværende', seasonAt(new Date('2026-09-15'), ends), 3);
+    check('uden arkiveringer er alt sæson 1', seasonAt(new Date('2026-09-15'), []), 1);
+
+    const live = new Map([['a', 'Alice']]);
+    check('nuværende navn foran det gemte, lige antal alfabetisk',
+        formatRandomTeams('H', pairs, live).split('\n').slice(2),
+        ['**3×** Alice & B', '**3×** C & D', '**1×** Alice & C', '**1×** B & D']);
+    check('ingen kampe endnu', formatRandomTeams('H', [], null), 'H\n\nNo random teams have been played yet.');
+
+    const many = Array.from({ length: 200 }, (_, i) => ({
+        count: 200 - i, players: [{ playerId: `x${i}`, name: `Spiller-${i}` }, { playerId: `y${i}`, name: `Makker-${i}` }]
+    }));
+    const fitted = formatRandomTeams('H', many, null);
+    check('lang liste holder sig under grænsen', [...fitted].length <= 2000, true);
+    check('halelinjen tæller de skårne', /\n…and \d+ more$/.test(fitted), true);
 }
 
 if (failures.length) {

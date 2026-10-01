@@ -124,6 +124,12 @@ const ALL_COMMANDS = [
     },
     { name: "team-list", description: "See every named team in this channel", type: 1 },
     {
+        name: "random-teams",
+        description: "See how often each pair has ended up together in /play",
+        type: 1,
+        options: [{ name: "season", description: "One season only (default: all seasons)", type: 4, required: false }]
+    },
+    {
         name: "result",
         description: "Report the match result",
         type: 1,
