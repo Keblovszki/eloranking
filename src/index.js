@@ -304,8 +304,7 @@ async function runCommand(interaction, env, ctx) {
                 const session = client.startSession();
                 let newSeasonId = 1;
                 try {
-                    const lastSeason = await db.collection(PLAYERS_HISTORY_COLLECTION).findOne({ channelId: channel_id }, { sort: { seasonId: -1 } });
-                    if (lastSeason) newSeasonId = lastSeason.seasonId + 1;
+                    newSeasonId = await currentSeasonId(db, PLAYERS_HISTORY_COLLECTION, channel_id);
 
                     await session.withTransaction(async () => {
                         const playersToArchive = await db.collection(PLAYERS_COLLECTION).find({ channelId: channel_id }).toArray();
@@ -444,8 +443,9 @@ async function runCommand(interaction, env, ctx) {
 
                 const standings = await getWordleStandings(db, channel_id, getBannedWordleIds(env));
                 const wordleNames = await fetchGuildDisplayNames(env, guild_id);
+                const wordleSeasonId = await currentSeasonId(db, WORDLE_SEASONS_COLLECTION, channel_id);
                 return respondEphemeral(
-                    formatWordleLeaderboard(withCurrentNames(standings, wordleNames))
+                    formatWordleLeaderboard(withCurrentNames(standings, wordleNames), WORDLE_LEADERBOARD_LIMIT, wordleSeasonTitle({ seasonId: wordleSeasonId }))
                     ?? "No Wordle results yet — the ranking is built from the Wordle app's daily post."
                 );
             }
@@ -514,6 +514,7 @@ async function runCommand(interaction, env, ctx) {
                 if (rows.length === 0) return respond("Ingen spillere på ranglisten endnu.");
 
                 const rankNames = await fetchGuildDisplayNames(env, guild_id);
+                const rankSeasonId = await currentSeasonId(db, PLAYERS_HISTORY_COLLECTION, channel_id);
 
                 let currentRank = 0;
                 let lastElo = -1;
@@ -540,7 +541,7 @@ async function runCommand(interaction, env, ctx) {
 
                     return `${rankPrefix}${currentName(rankNames, row.playerId, row.name)}: ${currentScore} ${fire}${poop}`;
                 });
-                return respond(`🏆 **${isSingle ? "Single" : "Double"} Ranking** 🏆\n--------------------------------------\n` + printRows.join('\n'));
+                return respond(`🏆 **${isSingle ? "Single" : "Double"} Ranking — Season ${rankSeasonId}** 🏆\n--------------------------------------\n` + printRows.join('\n'));
 
             case "season-ranking":
                 const seasonId = options[0].value;
@@ -574,6 +575,7 @@ async function runCommand(interaction, env, ctx) {
 
                 const statRows = await db.collection(PLAYERS_COLLECTION).find({ channelId: channel_id }).toArray();
                 const statNames = await fetchGuildDisplayNames(env, guild_id);
+                const statSeasonId = await currentSeasonId(db, PLAYERS_HISTORY_COLLECTION, channel_id);
                 // Listen står alfabetisk efter det navn der faktisk bliver vist,
                 // så sorteringen hører til her og ikke i databasen.
                 const statPrint = statRows
@@ -587,7 +589,7 @@ async function runCommand(interaction, env, ctx) {
                         else if (row.losingStreak > 0) currentStreak = `L${row.losingStreak}`;
                         return `${row.shown} - MP: ${matchesPlayed}, WR: ${winRate}%, Streak: ${currentStreak}`;
                     });
-                if (statPrint.length > 0) return respond(statPrint.join('\n'));
+                if (statPrint.length > 0) return respond([`📊 **Stats — Season ${statSeasonId}** 📊`, ...statPrint].join('\n'));
                 return respond("There are no statistics yet!");
 
             // --- MATCHMAKING COMMANDS ---
@@ -2249,6 +2251,14 @@ function getRerolledTeams([p1, p2, p3, p4]) {
     return Math.random() < 0.5
         ? [p1, p3, p2, p4]
         : [p1, p4, p2, p3];
+}
+
+// Nummeret på den igangværende sæson: den efter den senest arkiverede i
+// kollektionen, eller 1 når ingen er arkiveret endnu.
+async function currentSeasonId(db, seasonsCollection, channelId) {
+    const last = await db.collection(seasonsCollection)
+        .findOne({ channelId }, { sort: { seasonId: -1 }, projection: { seasonId: 1 } });
+    return (last?.seasonId ?? 0) + 1;
 }
 
 // --- Tilfældige hold ---
