@@ -174,8 +174,8 @@ linje er ét rul med dato, tal, tier, EP og hvor rullet ligger i forhold til
 dårligt. Percentilen regnes præcis som den på `/roll`: begge sider tælles hver
 for sig, rullet tæller sig selv med, og den side rullet hører til er den der
 vises. Svaret er ephemeral, ligesom `/roll-stats`, så en historik ikke fylder
-kanalen. Listen skæres af ved 15 rul, for en Discord-besked kan højst rumme
-2000 tegn.
+kanalen. Historikken vises 15 rul ad gangen med knapper til nyere og ældre rul,
+for en Discord-besked kan højst rumme 2000 tegn.
 
 Sæt `RNGDLE_CHANNEL_ID` i `wrangler.toml` til ID'et på den kanal, spillet skal
 køre i. RNGdle-kommandoerne virker **kun** der, og de øvrige kommandoer virker

@@ -85,6 +85,15 @@ export default {
                     data: { content: breakdown, flags: 64 }
                 });
             }
+            // Bladring i /roll-history. Siden kræver et databaseopslag, så klikket
+            // kvitteres med det samme og beskeden redigeres bagefter.
+            if (customId.startsWith("rngdle_history:")) {
+                const [, targetId, page] = customId.split(":");
+                ctx.waitUntil(turnRngdleHistoryPage(interaction, env, targetId, Number(page)).catch(
+                    err => console.error("Kunne ikke bladre i historikken:", err)
+                ));
+                return Response.json({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE });
+            }
             console.error(`Ukendt komponent: ${customId}`);
             return new Response("Unknown component", { status: 400 });
         }
@@ -419,9 +428,10 @@ async function runCommand(interaction, env, ctx) {
                         : "That player hasn't rolled yet.");
                 }
                 const historyNames = await fetchGuildDisplayNames(env, guild_id);
-                return respondEphemeral(formatRngdleHistory({
+                const page = rngdleHistoryPage({
                     ...history, name: currentName(historyNames, targetId, history.name)
-                }));
+                }, targetId, 0);
+                return respondEphemeral(page.content, page.components);
             }
 
             // --- WORDLE COMMANDS ---
@@ -2158,22 +2168,77 @@ function formatRngdlePlayerStats(s) {
     return lines.join('\n');
 }
 
-// Historikken deler ramme med stillingerne, så den også får overskrift, streg og
-// det samme loft på antal linjer — en Discord-besked kan ikke rumme mere. Er der
-// flere rul end der er plads til, skriver rammen selv "…and N more".
-export function formatRngdleHistory(h) {
+const RNGDLE_HISTORY_PAGE_SIZE = 15;
+
+// Historikken deler ramme med stillingerne og vises én side ad gangen — en
+// Discord-besked kan højst rumme 2000 tegn. Er siden uden for historikken, vises
+// den nærmeste.
+export function formatRngdleHistory(h, page = 0) {
     const count = h.rolls.length;
+    const pages = Math.ceil(count / RNGDLE_HISTORY_PAGE_SIZE);
+    const shown = Math.min(Math.max(page, 0), pages - 1);
     const average = Math.round(h.totalEp / count);
     const summary =
         `🎲 ${count} ${count === 1 ? 'roll' : 'rolls'} · ` +
         `💰 **${h.totalEp.toLocaleString()} EP** · ` +
-        `⌀ ${average.toLocaleString()} EP per roll`;
+        `⌀ ${average.toLocaleString()} EP per roll` +
+        (pages > 1 ? ` · page ${shown + 1}/${pages}` : '');
 
-    return formatRngdleBoard(`📜 **RNGdle history — ${h.name}** 📜\n${summary}`, h.rolls, r => {
+    const start = shown * RNGDLE_HISTORY_PAGE_SIZE;
+    const rolls = h.rolls.slice(start, start + RNGDLE_HISTORY_PAGE_SIZE);
+    return formatRngdleBoard(`📜 **RNGdle history — ${h.name}** 📜\n${summary}`, rolls, r => {
         const percentile = formatPercentileShort(r.percentile);
         return `${r.dateKey} — 🎲 **${r.number}** ${tierEmoji(r.tier)} **${r.ep.toLocaleString()} EP**` +
             (percentile ? ` (${percentile})` : '');
-    });
+    }, RNGDLE_HISTORY_PAGE_SIZE);
+}
+
+// Én side af historikken med knapper til nyere og ældre rul. Spilleren og siden
+// sidder i custom_id, så et klik har alt det skal bruge for at slå siden op.
+export function rngdleHistoryPage(h, targetId, page) {
+    const pages = Math.ceil(h.rolls.length / RNGDLE_HISTORY_PAGE_SIZE);
+    const shown = Math.min(Math.max(page, 0), pages - 1);
+    const content = formatRngdleHistory(h, shown);
+    if (pages <= 1) return { content, components: [] };
+
+    const button = (label, target, disabled) =>
+        ({ type: 2, style: 2, label, disabled, custom_id: `rngdle_history:${targetId}:${target}` });
+    return {
+        content,
+        components: [{
+            type: 1,
+            components: [
+                button("◀ Newer", shown - 1, shown === 0),
+                button("Older ▶", shown + 1, shown === pages - 1)
+            ]
+        }]
+    };
+}
+
+// Klikket er allerede kvitteret, så den nye side leveres ved at redigere den
+// besked knapperne sidder på.
+async function turnRngdleHistoryPage(interaction, env, targetId, page) {
+    const client = new MongoClient(env.MONGODB_URI, MONGO_TIMEOUTS);
+    let reply;
+    try {
+        await client.connect();
+        const db = client.db(DB_ELO_NAME);
+        const history = await getRngdlePlayerHistory(db, interaction.channel_id, targetId, getBannedRngdleIds(env));
+        if (history) {
+            const names = await fetchGuildDisplayNames(env, interaction.guild_id);
+            reply = rngdleHistoryPage({ ...history, name: currentName(names, targetId, history.name) }, targetId, page);
+        } else {
+            reply = { content: "That player hasn't rolled yet.", components: [] };
+        }
+    } finally {
+        await client.close();
+    }
+
+    const res = await fetch(
+        `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
+        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reply) }
+    );
+    if (!res.ok) console.error(`Discord edit failed (${res.status}): ${await res.text()}`);
 }
 
 function formatStatRoll(label, r) {

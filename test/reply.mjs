@@ -13,7 +13,7 @@
 import {
     sendReply, buildRatingUpdate, EPHEMERAL_COMMANDS,
     teamPairKey, normalizeTeamName, teamHeading,
-    makePercentileLookup, formatPercentileShort, formatRngdleHistory,
+    makePercentileLookup, formatPercentileShort, formatRngdleHistory, rngdleHistoryPage,
     recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement,
     seasonAt, countRandomTeams, formatRandomTeams, resolvedUser
 } from '../src/index.js';
@@ -182,16 +182,35 @@ function historyRoll(dateKey, number, ep, tier, percentile) {
         ]);
 }
 
-// En Discord-besked kan højst rumme 2000 tegn, så en lang historik skæres af i
-// stedet for at få hele svaret afvist.
+// En Discord-besked kan højst rumme 2000 tegn, så en lang historik vises 15 rul
+// ad gangen med knapper til at bladre.
 {
     const many = Array.from({ length: 20 }, (_, i) =>
         historyRoll(`2025-09-${String(i + 1).padStart(2, '0')}`, i, 100, 'common', null));
-    const lines = formatRngdleHistory({ name: 'Hannibal', totalEp: 2000, rolls: many }).split('\n');
+    const history = { name: 'Hannibal', totalEp: 2000, rolls: many };
+    const ids = page => page.components[0].components.map(b => b.custom_id);
+    const disabled = page => page.components[0].components.map(b => b.disabled);
 
-    // 2 linjer overskrift + 1 streg + 15 rul + 1 afkortningslinje.
-    check('lang historik skæres af', lines.length, 19);
-    check('afkortningen siger hvor mange der mangler', lines.at(-1), '…and 5 more');
+    const first = rngdleHistoryPage(history, '42', 0);
+    const firstLines = first.content.split('\n');
+    // 2 linjer overskrift + 1 streg + 15 rul.
+    check('første side har 15 rul', firstLines.length, 18);
+    check('første side starter med det nyeste rul', firstLines[3].startsWith('2025-09-01'), true);
+    check('opsummeringen siger hvilken side', firstLines[1].endsWith('· page 1/2'), true);
+    check('første side kan kun bladre frem', disabled(first), [true, false]);
+    check('knapperne bærer spiller og side', ids(first), ['rngdle_history:42:-1', 'rngdle_history:42:1']);
+
+    const last = rngdleHistoryPage(history, '42', 1);
+    const lastLines = last.content.split('\n');
+    check('sidste side har resten', lastLines.length, 8);
+    check('sidste side fortsætter hvor første slap', lastLines[3].startsWith('2025-09-16'), true);
+    check('sidste side kan kun bladre tilbage', disabled(last), [false, true]);
+
+    check('en side bag historikken viser den sidste', rngdleHistoryPage(history, '42', 7).content, last.content);
+
+    const short = rngdleHistoryPage({ ...history, rolls: many.slice(0, 15) }, '42', 0);
+    check('én side har ingen knapper', short.components, []);
+    check('én side nævner ikke sider', short.content.includes('page'), false);
 }
 
 check('/roll-history står som altid-ephemeral', EPHEMERAL_COMMANDS.has('roll-history'), true);
