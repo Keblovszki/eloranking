@@ -80,16 +80,21 @@ $env:APP_ID="din_app_id"; $env:BOT_TOKEN="din_bot_token"; node command-setup.js
 ## Holdnavne
 
 Et makkerpar kan give sig selv et navn, så doubler ikke bare er "Team 1" og
-"Team 2". Et hold ER de to spillere: dit holdnavn hænger på hvem du spiller med,
-og de to spillere er de eneste der kan ændre det — det følger af kommandoen, som
-kun kan navngive det hold man selv er den ene halvdel af.
+"Team 2". Et hold ER de to spillere: dit holdnavn hænger på hvem du spiller med.
+Har et hold ikke noget navn endnu, kan alle andre give det et — men kun de to
+spillere selv kan omdøbe holdet eller fjerne navnet igen.
 
-| Kommando                                  | Hvad den gør                                     |
-| ----------------------------------------- | ------------------------------------------------ |
-| `/set-team-name teammate:@X name:Navnet`  | Døber holdet dig + X.                            |
-| `/set-team-name teammate:@X`              | Fjerner navnet igen (`name` udeladt).            |
-| `/team-name teammate:@X`                  | Viser hvad I to hedder.                          |
-| `/team-list`                              | Alle navngivne hold i kanalen.                   |
+| Kommando                                            | Hvad den gør                                      |
+| --------------------------------------------------- | ------------------------------------------------- |
+| `/set-team-name teammate:@X name:Navnet`            | Døber holdet dig + X.                             |
+| `/set-team-name teammate:@X`                        | Fjerner navnet igen (`name` udeladt).             |
+| `/set-team-name teammate:@X player:@Y name:Navnet`  | Døber holdet Y + X, hvis de ikke har et navn.     |
+| `/team-name teammate:@X`                            | Viser hvad I to hedder.                           |
+| `/team-list`                                        | Alle navngivne hold i kanalen.                    |
+
+At et fremmed navn kun må sættes på et hold uden navn, er en del af selve
+skrivningen (`$setOnInsert`), ikke en læsning inden: to der navngiver samme hold
+samtidig kan ikke begge få lov.
 
 Navne er **pr. kanal**, ligesom ranglisten. Det samme makkerpar kan hedde noget
 forskelligt i to kanaler, og et navn taget i den ene kanal blokerer ikke i den

@@ -779,49 +779,72 @@ async function runCommand(interaction, env, ctx) {
 
             case "set-team-name": {
                 const tnMateId = options.find(o => o.name === "teammate").value;
-                if (tnMateId === id) return respond("You can not be your own teammate.");
+                // Uden "player" er det ens eget hold man navngiver. Med "player"
+                // navngiver man et andet makkerpar — men kun hvis det ikke har et
+                // navn i forvejen.
+                const tnPlayerId = options.find(o => o.name === "player")?.value ?? id;
+                if (tnMateId === tnPlayerId) return respond(tnPlayerId === id
+                    ? "You can not be your own teammate."
+                    : "A team needs two different players.");
 
                 // Samme krav som /play-double: et holdnavn hører til to spillere
                 // der faktisk kan spille sammen i kanalen.
                 const tnPlayers = await db.collection(PLAYERS_COLLECTION)
-                    .find({ playerId: { $in: [id, tnMateId] }, channelId: channel_id }).toArray();
-                if (!tnPlayers.some(p => p.playerId === id)) return respond("You have not joined the ranking yet.");
-                if (!tnPlayers.some(p => p.playerId === tnMateId)) return respond("Your teammate has not joined the ranking yet.");
+                    .find({ playerId: { $in: [tnPlayerId, tnMateId] }, channelId: channel_id }).toArray();
+                for (const pid of [tnPlayerId, tnMateId]) {
+                    if (!tnPlayers.some(p => p.playerId === pid)) {
+                        return respond(pid === id ? "You have not joined the ranking yet." : `<@${pid}> has not joined the ranking yet.`);
+                    }
+                }
 
-                // Der er ingen rettighedstjek: man navngiver det hold man selv er
-                // den ene halvdel af, så det at være et af de to medlemmer følger
-                // af selve kommandoen.
-                const tnPairKey = teamPairKey(id, tnMateId);
+                // Holdets egne to spillere må alt. Alle andre må kun give et hold
+                // uden navn et navn: ikke omdøbe det og ikke fjerne det igen.
+                const tnIsMember = tnPlayerId === id || tnMateId === id;
+                const tnPairKey = teamPairKey(tnPlayerId, tnMateId);
+                const tnTeam = `<@${tnPlayerId}> and <@${tnMateId}>`;
                 const tnRaw = options.find(o => o.name === "name")?.value;
 
                 if (tnRaw === undefined) {
+                    if (!tnIsMember) return respond("Only the two players on a team can clear its name.");
                     const tnCleared = await db.collection(TEAMS_COLLECTION)
                         .findOneAndDelete({ channelId: channel_id, pairKey: tnPairKey });
-                    if (!tnCleared) return respond(`<@${id}> and <@${tnMateId}> don't have a team name in this channel.`);
-                    return respond(`🏷️ <@${id}> and <@${tnMateId}> are no longer known as **${tnCleared.name}**.`);
+                    if (!tnCleared) return respond(`${tnTeam} don't have a team name in this channel.`);
+                    return respond(`🏷️ ${tnTeam} are no longer known as **${tnCleared.name}**.`);
                 }
 
                 const tnName = normalizeTeamName(tnRaw);
                 if (tnName.error) return respond(`❌ ${tnName.error}`);
 
+                const tnFields = {
+                    name: tnName.name, nameKey: tnName.nameKey, setBy: id,
+                    playerIds: [tnPlayerId, tnMateId].sort(), updatedAt: new Date()
+                };
+                // $setOnInsert gør "kun hvis holdet ikke har et navn" til en del af
+                // selve skrivningen, så to der navngiver samme hold samtidig ikke
+                // begge kan få lov.
+                const tnUpdate = tnIsMember ? { $set: tnFields } : { $setOnInsert: tnFields };
+
                 await ensureTeamIndexes(db);
+                let tnResult;
                 try {
-                    await db.collection(TEAMS_COLLECTION).updateOne(
-                        { channelId: channel_id, pairKey: tnPairKey },
-                        { $set: {
-                            name: tnName.name, nameKey: tnName.nameKey, setBy: id,
-                            playerIds: [id, tnMateId].sort(), updatedAt: new Date()
-                        } },
-                        { upsert: true }
-                    );
+                    tnResult = await db.collection(TEAMS_COLLECTION).updateOne(
+                        { channelId: channel_id, pairKey: tnPairKey }, tnUpdate, { upsert: true });
                 } catch (err) {
-                    // Det unikke indeks på (kanal, nameKey) ER reglen om at to hold
-                    // ikke kan hedde det samme — ikke en læsning inden skrivningen,
-                    // som to samtidige omdøbninger kunne slippe forbi.
-                    if (err.code === 11000) return respond(`**${tnName.name}** is already taken by another team in this channel.`);
-                    throw err;
+                    if (err.code !== 11000) throw err;
+                    // Begge unikke indekser kan slå til her: (kanal, nameKey) når
+                    // navnet er taget, og (kanal, pairKey) når en anden lige nåede
+                    // at navngive holdet først. Hvilket det var, afgør beskeden.
+                    const tnRaced = await db.collection(TEAMS_COLLECTION).findOne({ channelId: channel_id, pairKey: tnPairKey });
+                    if (!tnIsMember && tnRaced) return respond(`${tnTeam} already have a team name: **${tnRaced.name}**.`);
+                    return respond(`**${tnName.name}** is already taken by another team in this channel.`);
                 }
-                return respond(`🏷️ <@${id}> and <@${tnMateId}> are now known as **${tnName.name}**!`);
+
+                if (tnIsMember) return respond(`🏷️ ${tnTeam} are now known as **${tnName.name}**!`);
+                if (tnResult.upsertedCount === 0) {
+                    const tnExisting = await findTeamName(db, channel_id, tnPlayerId, tnMateId);
+                    return respond(`${tnTeam} already have a team name${tnExisting ? `: **${tnExisting}**` : ""}. Only they can change it.`);
+                }
+                return respond(`🏷️ ${global_name} has named ${tnTeam} **${tnName.name}**! They can change it with **/set-team-name**.`);
             }
 
             case "team-name": {
@@ -1033,7 +1056,8 @@ async function runCommand(interaction, env, ctx) {
                     `Betting closes as soon as the result is reported.\n\n` +
                     "**TEAM NAMES**\n" +
                     `Name the team you and a teammate make up: **/set-team-name**. Leave *name* out to clear it.\n` +
-                    `Only the two of you can rename your team, and the name only counts in this channel.\n` +
+                    `Name another team by adding *player* — but only if they don't have a name yet.\n` +
+                    `Only the two players on a team can rename or clear it, and the name only counts in this channel.\n` +
                     `See one team: **/team-name**. See them all: **/team-list**.\n\n` +
                     "**RANKING**\n" +
                     `See rankings: **/single-ranking** or **/double-ranking**.\n\n` +

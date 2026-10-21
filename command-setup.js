@@ -88,11 +88,12 @@ const ALL_COMMANDS = [
     },
     {
         name: "set-team-name",
-        description: "Name the team you and your teammate make up in this channel",
+        description: "Name your team in this channel — or another team that has no name yet",
         type: 1,
         options: [
             { name: "teammate", description: "Who you play with", type: 6, required: true },
-            { name: "name", description: "The team name — leave empty to clear it", type: 3, required: false }
+            { name: "name", description: "The team name — leave empty to clear it", type: 3, required: false },
+            { name: "player", description: "Name someone else's team: the other player (only if they have no name yet)", type: 6, required: false }
         ]
     },
     {
