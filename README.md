@@ -9,6 +9,8 @@ En Discord-bot der holder styr på Elo-ranking for single- og double-kampe. Bygg
 - Elo-ranking for både single- og double-kampe
 - Sæsoner med historik og statistik
 - Udfordringer, resultatrapportering og accept/afvis-flow
+- Væddemål (`/bet`): tilskuere kan satse på et hold i en igangværende kamp og vinde eller tabe
+  20 % af holdets Elo-ændring (mindst 1 point)
 - Holdnavne, som et makkerpar selv sætter pr. kanal
 - Wordle-rangliste bygget på gruppens daglige resultat fra Wordle-appen
 - Admin-kommandoer (nulstil sæson, annullér kampe m.m.)
