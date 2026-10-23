@@ -306,7 +306,7 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
 
 // Per-sektions-lofterne garanterer ikke noget, for sektionerne kender ikke
 // hinandens størrelse. Den samlede besked måles derfor til sidst, og stillingen
-// skæres nedefra indtil den passer. Værste realistiske dag: 20 deltagere med lange
+// skæres nedefra indtil den passer. Værste realistiske dag: 20 spillere med lange
 // navne, seks rekorder, sæsonsummer på syv cifre og en fyldt stilling.
 {
     const length = s => [...s].length;
@@ -325,43 +325,39 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
             `🎲 **RNGdle Result of the Day** 🎲`,
             ...formatRngdleDayResult(todays, at, records)
         ];
-        return { ids, standings, sections };
+        return { standings, sections };
     };
     const lastSection = content => content.split('\n\n').at(-1).split('\n');
 
-    const { ids, standings, sections } = scenario(20);
-    const everyone = `Participants today: ${ids.map(pid => `<@${pid}>`).join(' ')}`;
-    check('podie, rekorder og deltagere fylder alene mere end der er plads til med fuld stilling',
-        length([...sections, everyone, ''].join('\n\n')) > 2000 - 15 * 60, true);
-
-    const content = fitRngdleAnnouncement(sections, ids, standings);
-    const board = lastSection(content);
+    const { standings, sections } = scenario(20);
+    const content = fitRngdleAnnouncement(sections, standings);
     check('den samlede besked holder sig under Discords grænse', length(content) <= 2000, true);
-    check('deltagerlisten er urørt så længe stillingen kan skæres', content.includes(everyone), true);
+    check('der er ingen deltagerliste', content.includes('Participants today'), false);
+
+    // Med en lavere grænse skæres stillingen nedefra.
+    const limit = length(fitRngdleAnnouncement(sections, standings, 100000)) - 200;
+    const cut = fitRngdleAnnouncement(sections, standings, limit);
+    const board = lastSection(cut);
+    check('den skårne besked holder sig under grænsen', length(cut) <= limit, true);
     check('stillingen er stadig med, skåret nedefra', board[0], '🏅 **All-time RNGdle leaderboard** 🏅');
     check('den bedste står øverst', board[2].startsWith('🥇Spillernavn-nummer-0000'), true);
     check('halelinjen tæller de skårne', board.at(-1), `…and ${20 - (board.length - 3)} more`);
     check('der blev rent faktisk skåret', board.length - 3 < 15, true);
     check('én række mere ville ikke have passet',
-        length(lastSection(fitRngdleAnnouncement(sections, ids, standings, 100000)).join('\n')) > length(board.join('\n')), true);
+        length(fitRngdleAnnouncement(sections, standings, limit + 1000)) > limit, true);
 
     // Er der plads, vises stillingen som altid — loftet på 15 og en halelinje.
-    const roomy = fitRngdleAnnouncement(sections.slice(0, 2), ids.slice(0, 3), standings);
+    const roomy = fitRngdleAnnouncement(sections.slice(0, 2), standings);
     check('med plads nok skæres intet ud over det faste loft', lastSection(roomy).length, 2 + 15 + 1);
 
-    // Med 100 deltagere kan mentions alene ikke få plads. Så beholdes de tre bedste
-    // i stillingen, og deltagerlisten skæres bagfra i stedet.
+    // Selv en dag med 100 spillere holder sig under grænsen.
     const big = scenario(100);
-    const crowded = fitRngdleAnnouncement(big.sections, big.ids, big.standings);
-    const crowdedBoard = lastSection(crowded);
-    check('100 deltagere holder sig under grænsen', length(crowded) <= 2000, true);
-    check('stillingen beholder de tre bedste', crowdedBoard.length, 2 + 3 + 1);
-    check('deltagerlisten skæres bagfra med halelinje', /^Participants today: (<@\d+> )+…and \d+ more$/.test(crowded.split('\n\n').at(-2)), true);
+    check('100 spillere holder sig under grænsen', length(fitRngdleAnnouncement(big.sections, big.standings)) <= 2000, true);
 
     // Kan ikke én række få plads, udgår stillingen, og sektionerne falder bagfra.
-    const tight = fitRngdleAnnouncement(sections, ids, standings, length(sections.slice(0, 2).join('\n\n')) + 5);
+    const tight = fitRngdleAnnouncement(sections, standings, length(sections.slice(0, 2).join('\n\n')) + 5);
     check('uden plads til stillingen står podiet tilbage', tight, sections.slice(0, 2).join('\n\n'));
-    check('uden stilling falder vi tilbage til sektionerne', fitRngdleAnnouncement(sections, ids, [], 100000), [...sections, everyone].join('\n\n'));
+    check('uden stilling falder vi tilbage til sektionerne', fitRngdleAnnouncement(sections, [], 100000), sections.join('\n\n'));
 }
 
 // Tilfældige hold: parret tælles uanset rækkefølge og uanset hvilket hold det
