@@ -182,10 +182,10 @@ køre i. RNGdle-kommandoerne virker **kun** der, og de øvrige kommandoer virker
 **alle andre steder end** der — Elo-ranglisten scopes på kanal, så de to ting
 skal holdes adskilt. Hver dag kl. 16:00 (København) annoncerer botten dagens
 tre bedste rul med percentil, de rekorder dagen satte, og den samlede stilling.
-Beskeden måles som helhed mod Discords 2000 tegn: bliver den for lang, skæres
-stillingen nedefra én række ad gangen ned til de tre bedste, og derefter
-deltagerlisten bagfra, indtil den passer. Det kræver `DISCORD_BOT_TOKEN` som
-secret.
+Kun podiet og rekordholderne bliver pinget — der er ingen liste over alle dagens
+deltagere. Beskeden måles som helhed mod Discords 2000 tegn: bliver den for
+lang, skæres stillingen nedefra én række ad gangen, indtil den passer. Det
+kræver `DISCORD_BOT_TOKEN` som secret.
 
 Døgnet følger København, ikke UTC. Hvert rul gemmes som ét dokument i
 `RngdleRolls`-kollektionen, og stillingen regnes altid ud fra rullene — der er
@@ -247,7 +247,7 @@ En bandlyst bruger:
 
 - får afvist alle RNGdle-kommandoerne (`/roll`, `/roll-ranking`, `/roll-stats`, `/roll-history`)
 - kan ikke slås op af andre: `/roll-stats` og `/roll-history` svarer som var der ingen rul
-- tælles ikke med i dagens resultat — hverken som vinder eller i deltagerlisten
+- tælles ikke med i dagens resultat — hverken på podiet eller i rekorderne
 - filtreres ud af den samlede stilling
 - får nægtet **Send Messages** i RNGdle-kanalen af botten
 
