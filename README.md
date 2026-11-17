@@ -12,6 +12,7 @@ En Discord-bot der holder styr på Elo-ranking for single- og double-kampe. Bygg
 - Væddemål (`/bet`): tilskuere kan satse på et hold i en igangværende kamp og vinde eller tabe
   20 % af holdets Elo-ændring (mindst 1 point)
 - Holdnavne, som et makkerpar selv sætter pr. kanal
+- Holdstatistik: de mest vindende, mest valgte og bedst matchede makkerpar i sæsonen
 - Wordle-rangliste bygget på gruppens daglige resultat fra Wordle-appen
 - Admin-kommandoer (nulstil sæson, annullér kampe m.m.)
 
@@ -136,6 +137,26 @@ med: en `/reroll` overskriver opstillingen, så de hold der blev rullet væk
 efterlader intet spor. Kampene har intet sæsonnummer, så en kamp hører til den
 sæson der var i gang da den blev oprettet — grænsen er hvornår `/reset-season`
 arkiverede sæsonen.
+
+## Holdstatistik
+
+`/team-stats` viser hvordan makkerparrene klarer sig i den igangværende sæson.
+Alle afgjorte doubler tæller, også dem fra `/play`:
+
+- **Most picked**: de par der har spillet flest kampe sammen.
+- **Best win rate**: højeste sejrsprocent blandt par med mindst 3 kampe.
+- **Most Elo won together**: hvor meget Elo parret har vundet i kampe sammen.
+  Den gemmes ikke på kampen, men regnes ud igen fra holdenes Elo da kampen startede.
+- **Biggest rivalries**: de to par der har mødt hinanden flest gange, med stillingen.
+- **Best chemistry**: parrets sejrsprocent sammen minus gennemsnittet af de to
+  spilleres sejrsprocent med alle makkere. Mindst 3 kampe sammen.
+
+`/team-stats player:@X` viser X's makkere: hvem X har spillet mest med, bedste og
+dårligste makker (mindst 3 kampe sammen) og X's nemesis, den modstander X har
+tabt flest gange til.
+
+Uafgjort tæller som en halv sejr. Under blind season er statistikken skjult, som
+`/stats`. Sæsonen afgrænses på samme måde som i `/random-teams`.
 
 ## Deploy til produktion
 

@@ -15,7 +15,8 @@ import {
     teamPairKey, normalizeTeamName, teamHeading,
     makePercentileLookup, formatPercentileShort, formatRngdleHistory, rngdleHistoryPage,
     recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement,
-    seasonAt, countRandomTeams, formatRandomTeams, resolvedUser
+    seasonAt, countRandomTeams, formatRandomTeams, resolvedUser,
+    computeTeamStats, formatTeamStats, formatPlayerTeamStats
 } from '../src/index.js';
 
 const failures = [];
@@ -407,6 +408,48 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     check('uden nick og globalt navn bruges username', resolvedUser(interaction, 'plain'), { bot: false, name: 'u2' });
     check('en bot kendes', resolvedUser(interaction, 'robot').bot, true);
     check('ukendt bruger', resolvedUser(interaction, 'nobody'), null);
+}
+
+// --- Holdstatistik ---
+
+// a+b vinder 3 af 4 mod c+d, og a+c taber én mod b+d. Så har a+b en bedre
+// sejrsprocent sammen end a og b har med alle deres makkere.
+{
+    const double = (t1, t2, team1Score) => ({
+        playerId1: t1[0], playerName1: t1[0].toUpperCase(), playerId2: t1[1], playerName2: t1[1].toUpperCase(),
+        playerId3: t2[0], playerName3: t2[0].toUpperCase(), playerId4: t2[1], playerName4: t2[1].toUpperCase(),
+        teamElo1: 1000, teamElo2: 1000, team1Score, team2Score: 1 - team1Score
+    });
+    const games = [
+        double(['a', 'b'], ['c', 'd'], 1), double(['b', 'a'], ['d', 'c'], 1),
+        double(['c', 'd'], ['a', 'b'], 1), double(['a', 'b'], ['c', 'd'], 1),
+        double(['a', 'c'], ['b', 'd'], 0)
+    ];
+    const stats = computeTeamStats(games);
+    const ab = stats.pairs.get(teamPairKey('a', 'b'));
+
+    check('parret tælles uanset rækkefølge og side', [ab.games, ab.wins, ab.losses], [4, 3, 1]);
+    // Lige hold: hver sejr giver +16, hvert nederlag -16.
+    check('Eloen regnes ud igen som /accept gjorde', ab.elo, 3 * 16 - 16);
+    check('opgøret samler begge sider af kampen',
+        stats.rivalries.get(`${teamPairKey('a', 'b')} vs ${teamPairKey('c', 'd')}`).games, 4);
+    // a: 3/5 = 60% i alt, b: 4/5 = 80% i alt. Sammen 75% mod gennemsnit 70%.
+    check('kemi er sejrsprocent sammen minus gennemsnittet af de to', Math.round(ab.chemistry * 100), 5);
+
+    const names = new Map([[teamPairKey('a', 'b'), 'Nordic Chaos']]);
+    const nameOf = pid => pid.toUpperCase();
+    const overview = formatTeamStats(stats, 4, nameOf, names);
+    check('oversigten viser holdnavnet foran spillerne', overview.includes('1. **Nordic Chaos** (A & B) — 4 games'), true);
+    check('et par med én kamp kommer ikke på procentlisten', /Best win rate[^]*A & C/.test(overview.split('📈')[0]), false);
+    check('rivaliseringen viser stillingen', overview.includes('**Nordic Chaos** (A & B) 3–1 C & D'), true);
+
+    const personal = formatPlayerTeamStats(stats, 4, 'c', nameOf, names);
+    check('mest spillede makker', personal.includes('Most played with: D — 4 games, 1W–3L'), true);
+    // A og B har begge slået c tre gange med c+d, men B også i kampen med b+d.
+    check('nemesis er den man har tabt mest til', personal.includes('Nemesis: B — beat you 4 times'), true);
+    check('ingen kampe giver en pæn besked',
+        formatPlayerTeamStats(stats, 4, 'x', () => 'X', names).endsWith('No doubles played this season yet.'), true);
+    check('ingen kampe i sæsonen', formatTeamStats(computeTeamStats([]), 1, nameOf, names).endsWith('No doubles have been played this season yet.'), true);
 }
 
 if (failures.length) {

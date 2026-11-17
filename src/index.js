@@ -1,5 +1,5 @@
 import { InteractionType, InteractionResponseType, verifyKey } from "discord-interactions";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 import { computeRoll, tierEmoji, MAX_ROLL } from "./rngdle.js";
 import {
     WORDLE_APP_ID, WORDLE_START_RATING,
@@ -949,6 +949,35 @@ async function runCommand(interaction, env, ctx) {
                 ));
             }
 
+            // Kun den igangværende sæson. Kampene har intet sæsonnummer, så
+            // sæsonen begynder hvor /reset-season arkiverede den forrige — samme
+            // grænse som /random-teams bruger.
+            case "team-stats": {
+                const tsSettings = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
+                if (tsSettings?.isBlind) return respond("🙈 **BLIND SEASON ER AKTIV!** 🙈\nStatistikker er skjult indtil sæsonen er slut!");
+
+                const tsEnds = await getEloSeasonEnds(db, channel_id);
+                const tsSeasonId = seasonAt(new Date(), tsEnds);
+                const tsStart = tsEnds.at(-1)?.endedAt;
+                const tsGames = await db.collection(GAMES_COLLECTION).find({
+                    channelId: channel_id, type: "double", status: "ended",
+                    // Oprundet til hele sekunder, så grænsen lander samme sted som
+                    // seasonAt sætter den ud fra kampens _id.
+                    ...(tsStart ? { _id: { $gte: ObjectId.createFromTime(Math.ceil(tsStart.getTime() / 1000)) } } : {})
+                }).toArray();
+
+                const tsStats = computeTeamStats(tsGames);
+                const tsLive = await fetchGuildDisplayNames(env, guild_id);
+                const tsNameOf = pid => currentName(tsLive, pid,
+                    tsStats.storedNames.get(pid) ?? resolvedUser(interaction, pid)?.name ?? "Unknown player");
+                const tsTeamNames = await fetchTeamNames(db, channel_id, [...tsStats.pairs.keys()]);
+
+                const tsPlayerId = options?.find(o => o.name === "player")?.value;
+                return respond(tsPlayerId
+                    ? formatPlayerTeamStats(tsStats, tsSeasonId, tsPlayerId, tsNameOf, tsTeamNames)
+                    : formatTeamStats(tsStats, tsSeasonId, tsNameOf, tsTeamNames));
+            }
+
             // --- HOLDNAVNE ---
 
             case "set-team-name": {
@@ -1210,7 +1239,8 @@ async function runCommand(interaction, env, ctx) {
                     `Only the two of you can rename your team, and the name only counts in this channel.\n` +
                     `See one team: **/team-name**. See them all: **/team-list**.\n\n` +
                     "**RANKING**\n" +
-                    `See rankings: **/single-ranking** or **/double-ranking**.\n\n` +
+                    `See rankings: **/single-ranking** or **/double-ranking**.\n` +
+                    `See which teams win and play the most: **/team-stats** — add *player* to see someone's best partner and nemesis.\n\n` +
                     "**RNGDLE**\n" +
                     (env.RNGDLE_CHANNEL_ID
                         ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is.\n`
@@ -2360,6 +2390,204 @@ export function formatRandomTeams(heading, pairs, namesById, limit = DISCORD_MES
 function calculateEloRatingDifference(playerRating, opponentRating, score, K = 32) {
     const expectedScore = 1 / (1 + Math.pow(10, (opponentRating - playerRating) / 400));
     return Math.round(K * (score - expectedScore));
+}
+
+// --- Holdstatistik ---
+
+// Under 3 kampe siger en procent ikke noget: et par der har vundet sin ene kamp
+// står ellers øverst med 100%.
+export const TEAM_STATS_MIN_GAMES = 3;
+const TEAM_STATS_TOP = 3;
+
+// Sejr, uafgjort, nederlag. Uafgjort tæller som en halv sejr i procenten, ligesom
+// i Elo-udregningen.
+function emptyRecord() {
+    return { games: 0, wins: 0, draws: 0, losses: 0 };
+}
+
+function addResult(record, score) {
+    record.games++;
+    if (score === 1) record.wins++;
+    else if (score === 0) record.losses++;
+    else record.draws++;
+}
+
+function winRate(record) {
+    return record.games > 0 ? (record.wins + record.draws / 2) / record.games : 0;
+}
+
+// Samler sæsonens afgjorte doubler pr. makkerpar, pr. opgør mellem to par og pr.
+// spiller. En kamp gemmer kun hvem der vandt, ikke cifrene. Eloen et par vandt
+// eller tabte gemmes heller ikke, men regnes ud igen præcis som /accept gjorde:
+// ud fra holdenes Elo da kampen startede.
+export function computeTeamStats(games) {
+    const pairs = new Map();
+    const rivalries = new Map();
+    const players = new Map();
+    const storedNames = new Map();
+
+    for (const g of games) {
+        const sides = [
+            { ids: [g.playerId1, g.playerId2], names: [g.playerName1, g.playerName2], elo: g.teamElo1, score: g.team1Score },
+            { ids: [g.playerId3, g.playerId4], names: [g.playerName3, g.playerName4], elo: g.teamElo2, score: g.team2Score }
+        ];
+        for (const side of sides) side.key = teamPairKey(...side.ids);
+
+        sides.forEach((side, i) => {
+            const opponent = sides[1 - i];
+            side.ids.forEach((pid, j) => storedNames.set(pid, side.names[j]));
+
+            const pair = pairs.get(side.key) ?? { key: side.key, playerIds: [...side.ids].sort(), elo: 0, ...emptyRecord() };
+            addResult(pair, side.score);
+            pair.elo += calculateEloRatingDifference(side.elo, opponent.elo, side.score, K);
+            pairs.set(side.key, pair);
+
+            for (const pid of side.ids) {
+                const player = players.get(pid) ?? { ...emptyRecord(), opponents: new Map() };
+                addResult(player, side.score);
+                for (const oid of opponent.ids) {
+                    const vs = player.opponents.get(oid) ?? emptyRecord();
+                    addResult(vs, side.score);
+                    player.opponents.set(oid, vs);
+                }
+                players.set(pid, player);
+            }
+        });
+
+        const [a, b] = [sides[0].key, sides[1].key].sort();
+        const rivalryKey = `${a} vs ${b}`;
+        const rivalry = rivalries.get(rivalryKey) ?? { keys: [a, b], games: 0, wins: { [a]: 0, [b]: 0 }, draws: 0 };
+        rivalry.games++;
+        const winner = sides.find(s => s.score === 1);
+        if (winner) rivalry.wins[winner.key]++;
+        else rivalry.draws++;
+        rivalries.set(rivalryKey, rivalry);
+    }
+
+    // Kemi: hvor meget bedre parret klarer sig sammen end de to spillere gør i
+    // gennemsnit med alle deres makkere i sæsonen.
+    for (const pair of pairs.values()) {
+        const apart = pair.playerIds.reduce((sum, pid) => sum + winRate(players.get(pid)), 0) / 2;
+        pair.chemistry = winRate(pair) - apart;
+        pair.apart = apart;
+    }
+
+    return { games: games.length, pairs, rivalries, players, storedNames };
+}
+
+function formatTeamRecord(r) {
+    return r.draws > 0 ? `${r.wins}W–${r.draws}D–${r.losses}L` : `${r.wins}W–${r.losses}L`;
+}
+
+function formatPercent(rate) {
+    return `${Math.round(rate * 100)}%`;
+}
+
+function plural(n, word) {
+    return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+// En sektion med op til tre rækker, eller ingenting hvis ingen par kvalificerer
+// sig — en tom overskrift er bare støj.
+function teamStatsSection(title, rows) {
+    if (rows.length === 0) return null;
+    return `${title}\n${rows.slice(0, TEAM_STATS_TOP).map((row, i) => `${i + 1}. ${row}`).join('\n')}`;
+}
+
+// nameOf(playerId) giver det navn spilleren vises med; teamNames er holdnavnene
+// pr. pairKey.
+export function formatTeamStats(stats, seasonId, nameOf, teamNames) {
+    const heading = `👥 **Team stats — Season ${seasonId}** 👥`;
+    if (stats.games === 0) return `${heading}\nNo doubles have been played this season yet.`;
+
+    const label = key => {
+        const players = stats.pairs.get(key).playerIds.map(nameOf).join(' & ');
+        const name = teamNames.get(key);
+        return name ? `**${name}** (${players})` : players;
+    };
+    const pairs = [...stats.pairs.values()];
+    const qualified = pairs.filter(p => p.games >= TEAM_STATS_MIN_GAMES);
+    const byName = (a, b) => label(a.key).localeCompare(label(b.key));
+
+    const sections = [
+        teamStatsSection("🤝 **Most picked**", [...pairs]
+            .sort((a, b) => b.games - a.games || byName(a, b))
+            .map(p => `${label(p.key)} — ${plural(p.games, "game")}`)),
+        teamStatsSection(`🏆 **Best win rate** (min. ${TEAM_STATS_MIN_GAMES} games)`, [...qualified]
+            .sort((a, b) => winRate(b) - winRate(a) || b.games - a.games || byName(a, b))
+            .map(p => `${label(p.key)} — ${formatPercent(winRate(p))} (${formatTeamRecord(p)})`)),
+        teamStatsSection("📈 **Most Elo won together**", pairs
+            .filter(p => p.elo > 0)
+            .sort((a, b) => b.elo - a.elo || byName(a, b))
+            .map(p => `${label(p.key)} — +${p.elo} Elo in ${plural(p.games, "game")}`)),
+        teamStatsSection("⚔️ **Biggest rivalries**", [...stats.rivalries.values()]
+            .filter(r => r.games >= 2)
+            .sort((a, b) => b.games - a.games)
+            .map(r => {
+                const [a, b] = r.keys;
+                const draws = r.draws > 0 ? `, ${plural(r.draws, "draw")}` : "";
+                return `${label(a)} ${r.wins[a]}–${r.wins[b]} ${label(b)}${draws}`;
+            })),
+        teamStatsSection(`🧪 **Best chemistry** (win rate together vs. with everyone else, min. ${TEAM_STATS_MIN_GAMES} games)`, qualified
+            .filter(p => p.chemistry > 0)
+            .sort((a, b) => b.chemistry - a.chemistry || byName(a, b))
+            .map(p => `${label(p.key)} — +${Math.round(p.chemistry * 100)} pts (${formatPercent(winRate(p))} together, ${formatPercent(p.apart)} on average)`))
+    ].filter(Boolean);
+
+    // Lange navne kan skubbe beskeden over Discords grænse. Så ryger de
+    // nederste sektioner frem for hele svaret.
+    const content = () => [
+        `${heading}\n${plural(stats.games, "double")} played this season`,
+        ...sections,
+        "See a player's partners with **/team-stats player:@someone**."
+    ].join('\n\n');
+    while (sections.length > 1 && messageLength(content()) > DISCORD_MESSAGE_LIMIT) sections.pop();
+    return content();
+}
+
+export function formatPlayerTeamStats(stats, seasonId, playerId, nameOf, teamNames) {
+    const heading = `👥 **${nameOf(playerId)}'s teams — Season ${seasonId}** 👥`;
+    const player = stats.players.get(playerId);
+    if (!player) return `${heading}\nNo doubles played this season yet.`;
+
+    const partners = [...stats.pairs.values()]
+        .filter(p => p.playerIds.includes(playerId))
+        .map(p => {
+            const mateId = p.playerIds.find(pid => pid !== playerId);
+            const name = teamNames.get(p.key);
+            return { ...p, label: `${nameOf(mateId)}${name ? ` (**${name}**)` : ""}` };
+        });
+    const qualified = partners.filter(p => p.games >= TEAM_STATS_MIN_GAMES);
+    const byRate = [...qualified].sort((a, b) => winRate(b) - winRate(a) || b.games - a.games);
+
+    const lines = [];
+    const mostPlayed = [...partners].sort((a, b) => b.games - a.games || winRate(b) - winRate(a))[0];
+    lines.push(`🤝 Most played with: ${mostPlayed.label} — ${plural(mostPlayed.games, "game")}, ${formatTeamRecord(mostPlayed)}`);
+    if (byRate.length > 0) {
+        const best = byRate[0];
+        lines.push(`🏆 Best partner: ${best.label} — ${formatPercent(winRate(best))} (${formatTeamRecord(best)})`);
+    }
+    if (byRate.length > 1) {
+        const worst = byRate.at(-1);
+        lines.push(`💀 Worst partner: ${worst.label} — ${formatPercent(winRate(worst))} (${formatTeamRecord(worst)})`);
+    }
+    if (byRate.length === 0) lines.push(`Best and worst partner show up after ${TEAM_STATS_MIN_GAMES} games with the same partner.`);
+
+    // Nemesis: modstanderen man har tabt flest gange til.
+    const nemesis = [...player.opponents.entries()]
+        .filter(([, vs]) => vs.losses > 0)
+        .sort(([, a], [, b]) => b.losses - a.losses || a.wins - b.wins)[0];
+    if (nemesis) {
+        const [nemesisId, vs] = nemesis;
+        lines.push(`😈 Nemesis: ${nameOf(nemesisId)} — beat you ${plural(vs.losses, "time")} (you are ${formatTeamRecord(vs)} against them)`);
+    }
+
+    return [
+        heading,
+        `${plural(player.games, "double")} with ${plural(partners.length, "partner")}: ${formatTeamRecord(player)} (${formatPercent(winRate(player))})`,
+        "",
+        ...lines
+    ].join('\n');
 }
 
 // --- Wordle ---

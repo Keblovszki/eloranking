@@ -69,6 +69,12 @@ const ALL_COMMANDS = [
     { name: "matches-overview", description: "See the status of current matches", type: 1 },
     { name: "stats", description: "See statistics for the current season", type: 1 },
     {
+        name: "team-stats",
+        description: "See which doubles teams win, play and click the most this season",
+        type: 1,
+        options: [{ name: "player", description: "See one player's partners and nemesis instead", type: 6, required: false }]
+    },
+    {
         name: "single-accepted",
         description: "Accept a single challenge",
         type: 1,
