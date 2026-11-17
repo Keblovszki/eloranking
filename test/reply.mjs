@@ -450,6 +450,28 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     check('nemesis er den man har tabt mest til', personal.includes('Nemesis: B — beat you 4 times'), true);
     check('ingen kampe giver en pæn besked',
         formatPlayerTeamStats(stats, 4, 'x', () => 'X', names).endsWith('No doubles played this season yet.'), true);
+    // Bets: e satser på a+b og vinder to gange (+3 hver ved lige hold, 20% af 16)
+    // og taber én gang. f taber sit eneste bet. Bets på en kamp der ikke er gjort
+    // op tæller ikke.
+    const withBets = (game, bets, betsSettled = true) => ({ ...game, betsSettled, bets: bets.map(([playerId, team]) => ({ playerId, playerName: playerId.toUpperCase(), team })) });
+    const betStats = computeTeamStats([
+        withBets(double(['a', 'b'], ['c', 'd'], 1), [['e', 1], ['f', 2]]),
+        withBets(double(['a', 'b'], ['c', 'd'], 1), [['e', 1]]),
+        withBets(double(['a', 'b'], ['c', 'd'], 0), [['e', 1]]),
+        withBets(double(['a', 'b'], ['c', 'd'], 0), [['e', 2]], false)
+    ]);
+    const e = betStats.bettors.get('e');
+    check('bets regnes ud igen som settleBets gjorde', [e.games, e.wins, e.losses, e.elo], [3, 2, 1, 3]);
+    check('et tabt bet trækker fra', betStats.bettors.get('f').elo, -3);
+    const betOverview = formatTeamStats(betStats, 4, nameOf, names);
+    check('bedste bettor vises med netto og rekord', betOverview.includes('💰 **Best bettors on doubles** (Elo won minus lost with /bet)\n1. E — +3 Elo net (2W–1L in 3 bets)'), true);
+    check('en bettor i minus kommer ikke på listen', /Best bettors[^]*F —/.test(betOverview), false);
+    check('ingen bets giver ingen bet-sektion', overview.includes('Best bettors'), false);
+    check('spillervisningen viser egne bets',
+        formatPlayerTeamStats(betStats, 4, 'f', nameOf, names).endsWith('💰 Bets: -3 Elo net (0W–1L in 1 bet)'), true);
+    check('en bettor uden doubler ser stadig sine bets',
+        formatPlayerTeamStats(betStats, 4, 'e', nameOf, names).includes('No doubles played this season yet.\n\n💰 Bets: +3 Elo net'), true);
+
     check('ingen kampe i sæsonen', formatTeamStats(computeTeamStats([]), 1, nameOf, names).endsWith('No doubles have been played this season yet.'), true);
 }
 
