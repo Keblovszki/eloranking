@@ -70,9 +70,12 @@ const ALL_COMMANDS = [
     { name: "stats", description: "See statistics for the current season", type: 1 },
     {
         name: "team-stats",
-        description: "See which doubles teams win, play and click the most this season",
+        description: "See which doubles teams win, play and click the most",
         type: 1,
-        options: [{ name: "player", description: "See one player's partners and nemesis instead", type: 6, required: false }]
+        options: [
+            { name: "player", description: "See one player's partners and nemesis instead", type: 6, required: false },
+            { name: "seasonal", description: "Only count the current season", type: 5, required: false }
+        ]
     },
     {
         name: "single-accepted",

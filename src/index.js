@@ -949,15 +949,18 @@ async function runCommand(interaction, env, ctx) {
                 ));
             }
 
-            // Kun den igangværende sæson. Kampene har intet sæsonnummer, så
-            // sæsonen begynder hvor /reset-season arkiverede den forrige — samme
-            // grænse som /random-teams bruger.
+            // Alle sæsoner, eller med seasonal kun den igangværende. Kampene har
+            // intet sæsonnummer, så sæsonen begynder hvor /reset-season arkiverede
+            // den forrige — samme grænse som /random-teams bruger.
             case "team-stats": {
+                // Blind season skjuler også alle-sæsoner-visningen, for den
+                // indeholder den igangværende sæsons kampe.
                 const tsSettings = await db.collection(SETTINGS_COLLECTION).findOne({ channelId: channel_id });
                 if (tsSettings?.isBlind) return respond("🙈 **BLIND SEASON ER AKTIV!** 🙈\nStatistikker er skjult indtil sæsonen er slut!");
 
-                const tsEnds = await getEloSeasonEnds(db, channel_id);
-                const tsSeasonId = seasonAt(new Date(), tsEnds);
+                const tsSeasonal = options?.find(o => o.name === "seasonal")?.value === true;
+                const tsEnds = tsSeasonal ? await getEloSeasonEnds(db, channel_id) : [];
+                const tsSeasonId = tsSeasonal ? seasonAt(new Date(), tsEnds) : null;
                 const tsStart = tsEnds.at(-1)?.endedAt;
                 const tsGames = await db.collection(GAMES_COLLECTION).find({
                     channelId: channel_id, type: "double", status: "ended",
@@ -1240,7 +1243,7 @@ async function runCommand(interaction, env, ctx) {
                     `See one team: **/team-name**. See them all: **/team-list**.\n\n` +
                     "**RANKING**\n" +
                     `See rankings: **/single-ranking** or **/double-ranking**.\n` +
-                    `See which teams win and play the most: **/team-stats** — add *player* to see someone's best partner and nemesis.\n\n` +
+                    `See which teams win and play the most: **/team-stats** — add *player* to see someone's best partner and nemesis, or *seasonal* for this season only.\n\n` +
                     "**RNGDLE**\n" +
                     (env.RNGDLE_CHANNEL_ID
                         ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is.\n`
@@ -2416,7 +2419,7 @@ function winRate(record) {
     return record.games > 0 ? (record.wins + record.draws / 2) / record.games : 0;
 }
 
-// Samler sæsonens afgjorte doubler pr. makkerpar, pr. opgør mellem to par og pr.
+// Samler de afgjorte doubler pr. makkerpar, pr. opgør mellem to par og pr.
 // spiller. En kamp gemmer kun hvem der vandt, ikke cifrene. Eloen et par vandt
 // eller tabte gemmes heller ikke, men regnes ud igen præcis som /accept gjorde:
 // ud fra holdenes Elo da kampen startede.
@@ -2465,7 +2468,7 @@ export function computeTeamStats(games) {
     }
 
     // Kemi: hvor meget bedre parret klarer sig sammen end de to spillere gør i
-    // gennemsnit med alle deres makkere i sæsonen.
+    // gennemsnit med alle deres makkere i de samme kampe.
     for (const pair of pairs.values()) {
         const apart = pair.playerIds.reduce((sum, pid) => sum + winRate(players.get(pid)), 0) / 2;
         pair.chemistry = winRate(pair) - apart;
@@ -2494,11 +2497,19 @@ function teamStatsSection(title, rows) {
     return `${title}\n${rows.slice(0, TEAM_STATS_TOP).map((row, i) => `${i + 1}. ${row}`).join('\n')}`;
 }
 
+// seasonId er null når statistikken dækker alle sæsoner.
+function teamStatsScope(seasonId) {
+    return seasonId == null
+        ? { title: "All seasons", during: "" }
+        : { title: `Season ${seasonId}`, during: " this season" };
+}
+
 // nameOf(playerId) giver det navn spilleren vises med; teamNames er holdnavnene
 // pr. pairKey.
 export function formatTeamStats(stats, seasonId, nameOf, teamNames) {
-    const heading = `👥 **Team stats — Season ${seasonId}** 👥`;
-    if (stats.games === 0) return `${heading}\nNo doubles have been played this season yet.`;
+    const scope = teamStatsScope(seasonId);
+    const heading = `👥 **Team stats — ${scope.title}** 👥`;
+    if (stats.games === 0) return `${heading}\nNo doubles have been played${scope.during} yet.`;
 
     const label = key => {
         const players = stats.pairs.get(key).playerIds.map(nameOf).join(' & ');
@@ -2537,7 +2548,7 @@ export function formatTeamStats(stats, seasonId, nameOf, teamNames) {
     // Lange navne kan skubbe beskeden over Discords grænse. Så ryger de
     // nederste sektioner frem for hele svaret.
     const content = () => [
-        `${heading}\n${plural(stats.games, "double")} played this season`,
+        `${heading}\n${plural(stats.games, "double")} played${scope.during}`,
         ...sections,
         "See a player's partners with **/team-stats player:@someone**."
     ].join('\n\n');
@@ -2546,9 +2557,10 @@ export function formatTeamStats(stats, seasonId, nameOf, teamNames) {
 }
 
 export function formatPlayerTeamStats(stats, seasonId, playerId, nameOf, teamNames) {
-    const heading = `👥 **${nameOf(playerId)}'s teams — Season ${seasonId}** 👥`;
+    const scope = teamStatsScope(seasonId);
+    const heading = `👥 **${nameOf(playerId)}'s teams — ${scope.title}** 👥`;
     const player = stats.players.get(playerId);
-    if (!player) return `${heading}\nNo doubles played this season yet.`;
+    if (!player) return `${heading}\nNo doubles played${scope.during} yet.`;
 
     const partners = [...stats.pairs.values()]
         .filter(p => p.playerIds.includes(playerId))

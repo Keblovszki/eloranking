@@ -12,7 +12,7 @@ En Discord-bot der holder styr på Elo-ranking for single- og double-kampe. Bygg
 - Væddemål (`/bet`): tilskuere kan satse på et hold i en igangværende kamp og vinde eller tabe
   20 % af holdets Elo-ændring (mindst 1 point)
 - Holdnavne, som et makkerpar selv sætter pr. kanal
-- Holdstatistik: de mest vindende, mest valgte og bedst matchede makkerpar i sæsonen
+- Holdstatistik: de mest vindende, mest valgte og bedst matchede makkerpar
 - Wordle-rangliste bygget på gruppens daglige resultat fra Wordle-appen
 - Admin-kommandoer (nulstil sæson, annullér kampe m.m.)
 
@@ -140,8 +140,9 @@ arkiverede sæsonen.
 
 ## Holdstatistik
 
-`/team-stats` viser hvordan makkerparrene klarer sig i den igangværende sæson.
-Alle afgjorte doubler tæller, også dem fra `/play`:
+`/team-stats` viser hvordan makkerparrene klarer sig på tværs af alle sæsoner.
+Med `seasonal:True` tæller kun den igangværende sæson. Alle afgjorte doubler
+tæller, også dem fra `/play`:
 
 - **Most picked**: de par der har spillet flest kampe sammen.
 - **Best win rate**: højeste sejrsprocent blandt par med mindst 3 kampe.
@@ -156,7 +157,8 @@ dårligste makker (mindst 3 kampe sammen) og X's nemesis, den modstander X har
 tabt flest gange til.
 
 Uafgjort tæller som en halv sejr. Under blind season er statistikken skjult, som
-`/stats`. Sæsonen afgrænses på samme måde som i `/random-teams`.
+`/stats`, også på tværs af sæsoner. Sæsonen afgrænses på samme måde som i
+`/random-teams`.
 
 ## Deploy til produktion
 

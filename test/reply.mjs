@@ -450,6 +450,12 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     check('ingen kampe giver en pæn besked',
         formatPlayerTeamStats(stats, 4, 'x', () => 'X', names).endsWith('No doubles played this season yet.'), true);
     check('ingen kampe i sæsonen', formatTeamStats(computeTeamStats([]), 1, nameOf, names).endsWith('No doubles have been played this season yet.'), true);
+
+    check('sæsonvisningen står under sæsonen', overview.startsWith('👥 **Team stats — Season 4** 👥\n5 doubles played this season'), true);
+    const allTime = formatTeamStats(stats, null, nameOf, names);
+    check('uden sæson dækker oversigten alle sæsoner', allTime.startsWith('👥 **Team stats — All seasons** 👥\n5 doubles played\n'), true);
+    check('spillervisningen uden sæson', formatPlayerTeamStats(stats, null, 'c', nameOf, names).startsWith("👥 **C's teams — All seasons** 👥"), true);
+    check('ingen kampe overhovedet', formatTeamStats(computeTeamStats([]), null, nameOf, names).endsWith('No doubles have been played yet.'), true);
 }
 
 if (failures.length) {
