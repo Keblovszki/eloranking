@@ -1215,46 +1215,7 @@ async function runCommand(interaction, env, ctx) {
                 return respond(moMessage);
 
             case "help":
-                return respond(
-                    "**HOW TO PLAY**\n" +
-                    `You join the ranking the first time you play or bet. Want to be on the list before that? Type: **/join-ranking**.\n\n` +
-                    "With this system you can play singles, doubles and doubles with a random partner. \n\n" +
-                    "**SINGLE**\n" +
-                    `To start a single type: **/play-single**.\n` +
-                    `To accept type: **/single-accepted** and add the creator.\n\n` +
-                    "**DOUBLE**\n" +
-                    `To start a double type: **/play-double** and add your partner.\n` +
-                    `To accept type: **/double-accepted** and add your partner and the creator.\n\n` +
-                    "**DOUBLE RANDOM**\n" +
-                    `To start a random double type: **/play**. Game starts when 4 players join.\n` +
-                    `Don't like the teams? Type: **/reroll** (max ${MAX_REROLLS} times per game).\n\n` +
-                    "**GAMES**\n" +
-                    `Report result: **/result**.\n` +
-                    `Accept result: **/accept**.\n\n` +
-                    "**BETTING**\n" +
-                    `Not playing? Bet on a team with **/bet**. You win or lose ${BET_SHARE * 100}% of what that team gets (at least ${BET_MINIMUM}).\n` +
-                    `Betting closes as soon as the result is reported.\n\n` +
-                    "**TEAM NAMES**\n" +
-                    `Name the team you and a teammate make up: **/set-team-name**. Leave *name* out to clear it.\n` +
-                    `Only the two of you can rename your team, and the name only counts in this channel.\n` +
-                    `See one team: **/team-name**. See them all: **/team-list**.\n\n` +
-                    "**RANKING**\n" +
-                    `See rankings: **/single-ranking** or **/double-ranking**.\n` +
-                    `See which teams win and play the most: **/team-stats** — add *player* to see someone's best partner and nemesis.\n\n` +
-                    "**RNGDLE**\n" +
-                    (env.RNGDLE_CHANNEL_ID
-                        ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is.\n`
-                        : `One roll a day with **/roll** — a random number scored on how interesting it is.\n`) +
-                    `**/roll-ranking** shows the all-time EP standings — pick **board** to see the highest or lowest rolls ever, or today's field instead.\n` +
-                    `**/roll-stats** shows a player's stats — rolls, total EP, wins, best and lowest roll, and biggest badge.\n` +
-                    `**/roll-history** lists a player's rolls newest first, each with how it ranks against every roll ever.\n\n` +
-                    "**WORDLE**\n" +
-                    (env.WORDLE_CHANNEL_ID
-                        ? `Play Wordle with the group in <#${env.WORDLE_CHANNEL_ID}> — nothing to type, the bot reads the Wordle app's morning post.\n`
-                        : `Play Wordle with the group — nothing to type, the bot reads the Wordle app's morning post.\n`) +
-                    `Every day is a mini tournament: everyone against everyone, fewest guesses wins, **X/6** loses to all who solved it.\n` +
-                    `**/wordle-ranking** shows the standings — pick **season** to see a past one. **/wordle-stats** a player's numbers, **/wordle-day** the latest results, **/wordle-seasons** every season so far.`
-                );
+                return respond(helpMessage(env));
 
             default:
                 return respond(`Command not implemented yet: ${name}`);
@@ -1264,6 +1225,46 @@ async function runCommand(interaction, env, ctx) {
         // Databasen lukkes sikkert
         await client.close();
     }
+}
+
+// --- Hjælp ---
+
+// Hele /help er én besked, så den skal holde sig under Discords grænse på 2000
+// tegn. test/reply.mjs måler den med og uden kanal-links.
+export function helpMessage(env) {
+    return "**HOW TO PLAY**\n" +
+        `You join the ranking when you first play or bet, or right away with **/join-ranking**.\n\n` +
+        "**SINGLE**\n" +
+        `Start: **/play-single**. Accept: **/single-accepted** and add the creator.\n\n` +
+        "**DOUBLE**\n" +
+        `Start: **/play-double** and add your partner. Accept: **/double-accepted** and add your partner and the creator.\n\n` +
+        "**DOUBLE RANDOM**\n" +
+        `Start: **/play**. The game starts when 4 players join.\n` +
+        `Don't like the teams? Type: **/reroll** (max ${MAX_REROLLS} times per game).\n\n` +
+        "**GAMES**\n" +
+        `Report result: **/result**. Accept result: **/accept**.\n\n` +
+        "**BETTING**\n" +
+        `Not playing? Bet on a team with **/bet**. You win or lose ${BET_SHARE * 100}% of what that team gets (at least ${BET_MINIMUM}).\n` +
+        `Betting closes as soon as the result is reported.\n\n` +
+        "**TEAM NAMES**\n" +
+        `Name your team with a teammate: **/set-team-name** (leave *name* out to clear it). Only you two can rename it, and it only counts in this channel.\n` +
+        `See one team: **/team-name**. See them all: **/team-list**.\n\n` +
+        "**RANKING**\n" +
+        `See rankings: **/single-ranking** or **/double-ranking**.\n` +
+        `Team stats: **/team-stats** — add *player* for someone's best partner and nemesis.\n\n` +
+        "**RNGDLE**\n" +
+        (env.RNGDLE_CHANNEL_ID
+            ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is.\n`
+            : `One roll a day with **/roll** — a random number scored on how interesting it is.\n`) +
+        `**/roll-ranking** shows the all-time EP standings — pick **board** for the highest or lowest rolls ever, or today's field.\n` +
+        `**/roll-stats** shows a player's rolls, EP, wins, best and lowest roll, and biggest badge.\n` +
+        `**/roll-history** lists a player's rolls newest first, each ranked against every roll ever.\n\n` +
+        "**WORDLE**\n" +
+        (env.WORDLE_CHANNEL_ID
+            ? `Play Wordle in <#${env.WORDLE_CHANNEL_ID}> — nothing to type, the bot reads the Wordle app's morning post.\n`
+            : `Play Wordle with the group — nothing to type, the bot reads the Wordle app's morning post.\n`) +
+        `Every day is a mini tournament: everyone against everyone, fewest guesses wins, **X/6** loses to all who solved it.\n` +
+        `**/wordle-ranking** shows the standings — pick **season** to see a past one. **/wordle-stats** a player's numbers, **/wordle-day** the latest results, **/wordle-seasons** every season so far.`;
 }
 
 // --- Spillere ---
