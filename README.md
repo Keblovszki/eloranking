@@ -141,13 +141,14 @@ arkiverede sæsonen.
 ## Holdstatistik
 
 `/team-stats` viser hvordan makkerparrene klarer sig i den igangværende sæson.
-Alle afgjorte doubler tæller, også dem fra `/play`:
+Med `season:<nummer>` vises en bestemt sæson, og med `all-seasons:True` alle
+sæsoner lagt sammen. Alle afgjorte doubler tæller, også dem fra `/play`:
 
 - **Most picked**: de par der har spillet flest kampe sammen.
 - **Best win rate**: højeste sejrsprocent blandt par med mindst 3 kampe.
 - **Most Elo won together**: hvor meget Elo parret har vundet i kampe sammen.
   Den gemmes ikke på kampen, men regnes ud igen fra holdenes Elo da kampen startede.
-- **Best bettors on doubles**: hvem der har vundet mest Elo på `/bet` i sæsonens doubler, netto
+- **Best bettors on doubles**: hvem der har vundet mest Elo på `/bet` i doublerne, netto
   (vundet minus tabt). Udbetalingen regnes ud igen fra holdets Elo-ændring.
 - **Biggest rivalries**: de to par der har mødt hinanden flest gange, med stillingen.
 - **Best chemistry**: parrets sejrsprocent sammen minus gennemsnittet af de to
@@ -157,8 +158,9 @@ Alle afgjorte doubler tæller, også dem fra `/play`:
 dårligste makker (mindst 3 kampe sammen) og X's nemesis, den modstander X har
 tabt flest gange til. Har X bettet på doubler, vises X's bet-resultat også.
 
-Uafgjort tæller som en halv sejr. Under blind season er statistikken skjult, som
-`/stats`. Sæsonen afgrænses på samme måde som i `/random-teams`.
+Uafgjort tæller som en halv sejr. Under blind season er den igangværende sæson og
+`all-seasons` skjult, som `/stats`; afsluttede sæsoner kan stadig ses. Sæsonen
+afgrænses på samme måde som i `/random-teams`.
 
 ## Deploy til produktion
 

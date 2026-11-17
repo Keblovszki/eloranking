@@ -16,7 +16,7 @@ import {
     makePercentileLookup, formatPercentileShort, formatRngdleHistory, rngdleHistoryPage,
     recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement,
     seasonAt, countRandomTeams, formatRandomTeams, resolvedUser,
-    computeTeamStats, formatTeamStats, formatPlayerTeamStats,
+    computeTeamStats, formatTeamStats, formatPlayerTeamStats, teamStatsScope, seasonGameIdFilter,
     helpMessage
 } from '../src/index.js';
 
@@ -439,17 +439,18 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
 
     const names = new Map([[teamPairKey('a', 'b'), 'Nordic Chaos']]);
     const nameOf = pid => pid.toUpperCase();
-    const overview = formatTeamStats(stats, 4, nameOf, names);
+    const s4 = teamStatsScope(4, 4);
+    const overview = formatTeamStats(stats, s4, nameOf, names);
     check('oversigten viser holdnavnet foran spillerne', overview.includes('1. **Nordic Chaos** (A & B) — 4 games'), true);
     check('et par med én kamp kommer ikke på procentlisten', /Best win rate[^]*A & C/.test(overview.split('📈')[0]), false);
     check('rivaliseringen viser stillingen', overview.includes('**Nordic Chaos** (A & B) 3–1 C & D'), true);
 
-    const personal = formatPlayerTeamStats(stats, 4, 'c', nameOf, names);
+    const personal = formatPlayerTeamStats(stats, s4, 'c', nameOf, names);
     check('mest spillede makker', personal.includes('Most played with: D — 4 games, 1W–3L'), true);
     // A og B har begge slået c tre gange med c+d, men B også i kampen med b+d.
     check('nemesis er den man har tabt mest til', personal.includes('Nemesis: B — beat you 4 times'), true);
     check('ingen kampe giver en pæn besked',
-        formatPlayerTeamStats(stats, 4, 'x', () => 'X', names).endsWith('No doubles played this season yet.'), true);
+        formatPlayerTeamStats(stats, s4, 'x', () => 'X', names).endsWith('No doubles have been played this season yet.'), true);
     // Bets: e satser på a+b og vinder to gange (+3 hver ved lige hold, 20% af 16)
     // og taber én gang. f taber sit eneste bet. Bets på en kamp der ikke er gjort
     // op tæller ikke.
@@ -463,16 +464,40 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     const e = betStats.bettors.get('e');
     check('bets regnes ud igen som settleBets gjorde', [e.games, e.wins, e.losses, e.elo], [3, 2, 1, 3]);
     check('et tabt bet trækker fra', betStats.bettors.get('f').elo, -3);
-    const betOverview = formatTeamStats(betStats, 4, nameOf, names);
+    const betOverview = formatTeamStats(betStats, s4, nameOf, names);
     check('bedste bettor vises med netto og rekord', betOverview.includes('💰 **Best bettors on doubles** (Elo won minus lost with /bet)\n1. E — +3 Elo net (2W–1L in 3 bets)'), true);
     check('en bettor i minus kommer ikke på listen', /Best bettors[^]*F —/.test(betOverview), false);
     check('ingen bets giver ingen bet-sektion', overview.includes('Best bettors'), false);
     check('spillervisningen viser egne bets',
-        formatPlayerTeamStats(betStats, 4, 'f', nameOf, names).endsWith('💰 Bets: -3 Elo net (0W–1L in 1 bet)'), true);
+        formatPlayerTeamStats(betStats, s4, 'f', nameOf, names).endsWith('💰 Bets: -3 Elo net (0W–1L in 1 bet)'), true);
     check('en bettor uden doubler ser stadig sine bets',
-        formatPlayerTeamStats(betStats, 4, 'e', nameOf, names).includes('No doubles played this season yet.\n\n💰 Bets: +3 Elo net'), true);
+        formatPlayerTeamStats(betStats, s4, 'e', nameOf, names).includes('No doubles have been played this season yet.\n\n💰 Bets: +3 Elo net'), true);
 
-    check('ingen kampe i sæsonen', formatTeamStats(computeTeamStats([]), 1, nameOf, names).endsWith('No doubles have been played this season yet.'), true);
+    check('ingen kampe i sæsonen', formatTeamStats(computeTeamStats([]), teamStatsScope(1, 1), nameOf, names).endsWith('No doubles have been played this season yet.'), true);
+
+    check('en afsluttet sæson står i datid',
+        formatTeamStats(computeTeamStats([]), teamStatsScope(2, 4), nameOf, names), '👥 **Team stats — Season 2** 👥\nNo doubles were played in season 2.');
+    check('alle sæsoner får sin egen overskrift',
+        formatTeamStats(stats, teamStatsScope(null, 4), nameOf, names).startsWith('👥 **Team stats — All seasons** 👥\n5 doubles played across all seasons'), true);
+    check('spillervisningen følger perioden',
+        formatPlayerTeamStats(stats, teamStatsScope(3, 4), 'c', nameOf, names).startsWith("👥 **C's teams — Season 3** 👥"), true);
+}
+
+// Sæsonfiltret skal give de samme kampe som seasonAt placerer i sæsonen.
+{
+    const ends = [
+        { seasonId: 1, endedAt: new Date('2026-03-01T12:00:00.500Z') },
+        { seasonId: 2, endedAt: new Date('2026-06-01T12:00:00Z') }
+    ];
+    const id = filter => Object.fromEntries(Object.entries(filter._id ?? {}).map(([op, oid]) => [op, oid.getTimestamp().toISOString()]));
+    check('første sæson har kun en slutgrænse', id(seasonGameIdFilter(1, ends)), { $lt: '2026-03-01T12:00:01.000Z' });
+    check('en midterste sæson har begge grænser', id(seasonGameIdFilter(2, ends)),
+        { $gte: '2026-03-01T12:00:01.000Z', $lt: '2026-06-01T12:00:00.000Z' });
+    check('den igangværende sæson har kun en startgrænse', id(seasonGameIdFilter(3, ends)), { $gte: '2026-06-01T12:00:00.000Z' });
+    check('uden arkiverede sæsoner tæller alt', seasonGameIdFilter(1, []), {});
+    check('grænsen følger seasonAt',
+        [seasonAt(new Date('2026-03-01T12:00:00Z'), ends), seasonAt(new Date('2026-03-01T12:00:01Z'), ends),
+         seasonAt(new Date('2026-06-01T11:59:59Z'), ends), seasonAt(new Date('2026-06-01T12:00:00Z'), ends)], [1, 2, 2, 3]);
 }
 
 // --- Hjælp ---
