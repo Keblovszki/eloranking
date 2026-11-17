@@ -1251,7 +1251,7 @@ export function helpMessage(env) {
         `See one team: **/team-name**. See them all: **/team-list**.\n\n` +
         "**RANKING**\n" +
         `See rankings: **/single-ranking** or **/double-ranking**.\n` +
-        `Team stats: **/team-stats** — add *player* for someone's best partner and nemesis.\n\n` +
+        `Team stats: **/team-stats** — add *player* for someone's best partner, nemesis and bets.\n\n` +
         "**RNGDLE**\n" +
         (env.RNGDLE_CHANNEL_ID
             ? `Over in <#${env.RNGDLE_CHANNEL_ID}> you get one roll a day with **/roll** — a random number scored on how interesting it is.\n`
@@ -2425,6 +2425,7 @@ export function computeTeamStats(games) {
     const pairs = new Map();
     const rivalries = new Map();
     const players = new Map();
+    const bettors = new Map();
     const storedNames = new Map();
 
     for (const g of games) {
@@ -2455,6 +2456,20 @@ export function computeTeamStats(games) {
             }
         });
 
+        // Udbetalingen gemmes heller ikke, men følger af holdets Elo-ændring
+        // ligesom i settleBets. Kun kampe hvor væddemålene faktisk er gjort op.
+        if (g.betsSettled) {
+            for (const bet of g.bets ?? []) {
+                const side = sides[bet.team - 1];
+                const teamEloDiff = calculateEloRatingDifference(side.elo, sides[2 - bet.team].elo, side.score, K);
+                const bettor = bettors.get(bet.playerId) ?? { playerId: bet.playerId, elo: 0, ...emptyRecord() };
+                addResult(bettor, side.score);
+                bettor.elo += calculateBetPayout(side.score, teamEloDiff);
+                bettors.set(bet.playerId, bettor);
+                if (!storedNames.has(bet.playerId)) storedNames.set(bet.playerId, bet.playerName);
+            }
+        }
+
         const [a, b] = [sides[0].key, sides[1].key].sort();
         const rivalryKey = `${a} vs ${b}`;
         const rivalry = rivalries.get(rivalryKey) ?? { keys: [a, b], games: 0, wins: { [a]: 0, [b]: 0 }, draws: 0 };
@@ -2473,11 +2488,16 @@ export function computeTeamStats(games) {
         pair.apart = apart;
     }
 
-    return { games: games.length, pairs, rivalries, players, storedNames };
+    return { games: games.length, pairs, rivalries, players, bettors, storedNames };
 }
 
 function formatTeamRecord(r) {
     return r.draws > 0 ? `${r.wins}W–${r.draws}D–${r.losses}L` : `${r.wins}W–${r.losses}L`;
+}
+
+// Fx "+24 Elo net (5W–2L in 7 bets)".
+function formatBetRecord(b) {
+    return `${b.elo > 0 ? "+" : ""}${b.elo} Elo net (${formatTeamRecord(b)} in ${plural(b.games, "bet")})`;
 }
 
 function formatPercent(rate) {
@@ -2521,6 +2541,10 @@ export function formatTeamStats(stats, seasonId, nameOf, teamNames) {
             .filter(p => p.elo > 0)
             .sort((a, b) => b.elo - a.elo || byName(a, b))
             .map(p => `${label(p.key)} — +${p.elo} Elo in ${plural(p.games, "game")}`)),
+        teamStatsSection("💰 **Best bettors on doubles** (Elo won minus lost with /bet)", [...stats.bettors.values()]
+            .filter(b => b.elo > 0)
+            .sort((a, b) => b.elo - a.elo || nameOf(a.playerId).localeCompare(nameOf(b.playerId)))
+            .map(b => `${nameOf(b.playerId)} — ${formatBetRecord(b)}`)),
         teamStatsSection("⚔️ **Biggest rivalries**", [...stats.rivalries.values()]
             .filter(r => r.games >= 2)
             .sort((a, b) => b.games - a.games)
@@ -2549,7 +2573,9 @@ export function formatTeamStats(stats, seasonId, nameOf, teamNames) {
 export function formatPlayerTeamStats(stats, seasonId, playerId, nameOf, teamNames) {
     const heading = `👥 **${nameOf(playerId)}'s teams — Season ${seasonId}** 👥`;
     const player = stats.players.get(playerId);
-    if (!player) return `${heading}\nNo doubles played this season yet.`;
+    const bettor = stats.bettors.get(playerId);
+    const betLine = bettor ? `💰 Bets: ${formatBetRecord(bettor)}` : null;
+    if (!player) return [`${heading}\nNo doubles played this season yet.`, betLine].filter(Boolean).join('\n\n');
 
     const partners = [...stats.pairs.values()]
         .filter(p => p.playerIds.includes(playerId))
@@ -2582,6 +2608,7 @@ export function formatPlayerTeamStats(stats, seasonId, playerId, nameOf, teamNam
         const [nemesisId, vs] = nemesis;
         lines.push(`😈 Nemesis: ${nameOf(nemesisId)} — beat you ${plural(vs.losses, "time")} (you are ${formatTeamRecord(vs)} against them)`);
     }
+    if (betLine) lines.push(betLine);
 
     return [
         heading,
