@@ -16,7 +16,8 @@ import {
     makePercentileLookup, formatPercentileShort, formatRngdleHistory, rngdleHistoryPage,
     recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement,
     seasonAt, countRandomTeams, formatRandomTeams, resolvedUser,
-    computeTeamStats, formatTeamStats, formatPlayerTeamStats
+    computeTeamStats, formatTeamStats, formatPlayerTeamStats,
+    helpMessage
 } from '../src/index.js';
 
 const failures = [];
@@ -450,6 +451,18 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     check('ingen kampe giver en pæn besked',
         formatPlayerTeamStats(stats, 4, 'x', () => 'X', names).endsWith('No doubles played this season yet.'), true);
     check('ingen kampe i sæsonen', formatTeamStats(computeTeamStats([]), 1, nameOf, names).endsWith('No doubles have been played this season yet.'), true);
+}
+
+// --- Hjælp ---
+
+// Discord afviser hele svaret over 2000 tegn. Kanal-links gør teksten længst, så
+// begge varianter måles. Et 19-cifret id er det længste Discord laver i dag.
+{
+    const longest = { RNGDLE_CHANNEL_ID: '1'.repeat(19), WORDLE_CHANNEL_ID: '1'.repeat(19) };
+    for (const [label, env] of [['med kanal-links', longest], ['uden kanal-links', {}]]) {
+        check(`/help holder sig under 2000 tegn ${label}`, [...helpMessage(env)].length <= 2000, true);
+    }
+    check('/help nævner /team-stats', helpMessage({}).includes('/team-stats'), true);
 }
 
 if (failures.length) {
