@@ -234,11 +234,17 @@ export async function sendReply(interaction, reply) {
 
     // Ephemeral kan ikke sættes på en redigering; den fulgte med kvitteringen.
     // Passer svaret ikke til den, sender vi det som en followup med de rigtige
-    // flag og fjerner kvitteringen i stedet. Followup først: fejler sletningen,
-    // står der en overflødig "tænker"-boble — fejler followuppen, står brugeren
-    // uden svar overhovedet.
+    // flag og fjerner kvitteringen i stedet. Discord gør den første followup
+    // efter en ubesvaret kvittering til en redigering af den og ser bort fra
+    // flaget, så kvitteringen får en pladsholder først. Followup før sletning:
+    // fejler sletningen, står pladsholderen tilbage — fejler followuppen, står
+    // brugeren uden svar overhovedet.
     const wantsEphemeral = (reply.flags & 64) === 64;
     if (wantsEphemeral !== EPHEMERAL_COMMANDS.has(interaction.data.name)) {
+        const held = await fetch(`${base}/messages/@original`, {
+            method: "PATCH", headers: json, body: JSON.stringify({ content: "…" })
+        });
+        if (!held.ok) console.error(`Discord placeholder failed (${held.status}): ${await held.text()}`);
         const posted = await fetch(base, { method: "POST", headers: json, body: JSON.stringify(reply) });
         if (!posted.ok) console.error(`Discord followup failed (${posted.status}): ${await posted.text()}`);
         await fetch(`${base}/messages/@original`, { method: "DELETE" });

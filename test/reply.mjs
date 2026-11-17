@@ -68,15 +68,27 @@ async function deliver(commandName, reply) {
 
 // /roll er offentlig i det almindelige tilfælde, men "du har allerede rullet i
 // dag" skal kun rulleren se. Synligheden kan ikke ændres bagefter, så svaret
-// sendes som en followup, og den offentlige kvittering fjernes.
+// sendes som en followup, og den offentlige kvittering fjernes. Kvitteringen
+// skal være besvaret inden followuppen, ellers redigerer Discord kvitteringen
+// i stedet for at lave en ny besked.
 {
     const calls = await deliver('roll', { content: 'You already rolled today.', flags: 64 });
     check('ephemeral svar på offentlig kommando bliver en followup',
-        calls.map(c => c.method), ['POST', 'DELETE']);
-    check('followuppen sendes før kvitteringen fjernes', calls[0].path, '/');
+        calls.map(c => c.method), ['PATCH', 'POST', 'DELETE']);
+    check('kvitteringen besvares med en pladsholder før followuppen',
+        [calls[0].path, calls[0].body], ['/messages/@original', { content: '…' }]);
+    check('followuppen sendes før kvitteringen fjernes', calls[1].path, '/');
     check('followuppen beholder flaget',
-        calls[0].body, { content: 'You already rolled today.', flags: 64 });
-    check('kvitteringen fjernes', calls[1].path, '/messages/@original');
+        calls[1].body, { content: 'You already rolled today.', flags: 64 });
+    check('kvitteringen fjernes', calls[2].path, '/messages/@original');
+}
+
+// Samme vej den anden vej: et offentligt svar på en altid-ephemeral kommando.
+{
+    const calls = await deliver('bet', { content: 'Public after all' });
+    check('offentligt svar på ephemeral kommando bliver en followup',
+        calls.map(c => c.method), ['PATCH', 'POST', 'DELETE']);
+    check('den offentlige followup har intet flag', calls[1].body, { content: 'Public after all' });
 }
 
 check('/roll står ikke som altid-ephemeral', EPHEMERAL_COMMANDS.has('roll'), false);
