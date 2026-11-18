@@ -1094,31 +1094,33 @@ async function runCommand(interaction, env, ctx) {
             // --- RESULTS OG ELO BEREGNING ---
 
             case "result":
-                const team1Score = options.find(o => o.name === "team_1_score").value;
-                const team2Score = options.find(o => o.name === "team_2_score").value;
-                let fTeam1 = team1Score > team2Score ? 1 : (team1Score === team2Score ? 0.5 : 0);
-                let fTeam2 = team1Score > team2Score ? 0 : (team1Score === team2Score ? 0.5 : 1);
+                const team1Points = options.find(o => o.name === "team_1_score").value;
+                const team2Points = options.find(o => o.name === "team_2_score").value;
+                // team1Score/team2Score er udfaldet (1, 0 eller 0.5) som Elo og væddemål
+                // regner på; scoren som den blev tastet gemmes ved siden af.
+                let fTeam1 = team1Points > team2Points ? 1 : (team1Points === team2Points ? 0.5 : 0);
+                let fTeam2 = team1Points > team2Points ? 0 : (team1Points === team2Points ? 0.5 : 1);
 
                 const rGame = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
                     { status: "started", channelId: channel_id, $or: [{ playerId1: id }, { playerId2: id }, { playerId3: id }, { playerId4: id }] },
                     // bettingClosed bliver aldrig sat tilbage af /reject. Ellers kunne man
                     // indberette et resultat, se det, afvise det og så vædde bagefter.
-                    { $set: { team1Score: fTeam1, team2Score: fTeam2, status: "result", bettingClosed: true } },
+                    { $set: { team1Score: fTeam1, team2Score: fTeam2, team1Points, team2Points, status: "result", bettingClosed: true } },
                     { returnDocument: 'after' }
                 );
                 if (!rGame) return respond("You have not participated in any started game.");
 
                 if (rGame.type === "single") {
-                    return respond(`Result reported by ${global_name}: \n\n${rGame.playerName1}: ${fTeam1}\n${rGame.playerName2}: ${fTeam2}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
+                    return respond(`Result reported by ${global_name}: \n\n${rGame.playerName1}: ${team1Points}\n${rGame.playerName2}: ${team2Points}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
                 } else {
                     const rNames = await getGameTeamNames(db, channel_id, rGame);
-                    return respond(`Result reported by ${global_name}: \n\n${teamHeading(1, rNames[1])}: ${rGame.playerName1}, ${rGame.playerName2}: ${fTeam1}\n${teamHeading(2, rNames[2])}: ${rGame.playerName3}, ${rGame.playerName4}: ${fTeam2}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
+                    return respond(`Result reported by ${global_name}: \n\n${teamHeading(1, rNames[1])}: ${rGame.playerName1}, ${rGame.playerName2}: ${team1Points}\n${teamHeading(2, rNames[2])}: ${rGame.playerName3}, ${rGame.playerName4}: ${team2Points}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
                 }
 
             case "reject":
                 const rejGame = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
                     { status: "result", channelId: channel_id, $or: [{ playerId1: id }, { playerId2: id }, { playerId3: id }, { playerId4: id }] },
-                    { $set: { status: "started", team1Score: null, team2Score: null } }
+                    { $set: { status: "started", team1Score: null, team2Score: null, team1Points: null, team2Points: null } }
                 );
                 if (!rejGame) return respond(await explainMissingResult(db, channel_id, "reject"));
                 return respond(`${global_name} has *rejected* the result. Type in a new result to be accepted.`);
@@ -1138,7 +1140,8 @@ async function runCommand(interaction, env, ctx) {
                 const t1Diff = calculateEloRatingDifference(aGame.teamElo1, aGame.teamElo2, aGame.team1Score, K);
                 const t2Diff = calculateEloRatingDifference(aGame.teamElo2, aGame.teamElo1, aGame.team2Score, K);
 
-                let accMessage = "The result has been accepted! \n\n";
+                const accScore = reportedScore(aGame);
+                let accMessage = `The result${accScore ? ` **${accScore}**` : ""} has been accepted! \n\n`;
                 if (isAccBlind) accMessage += "🙈 Pointene er blevet opdateret i skyggerne... Ingen ved hvor meget I vandt eller tabte!\n";
 
                 // Single og double adskiller sig kun ved hvilket ratingfelt der rykker,
@@ -1616,13 +1619,19 @@ export function betMatchChoices(games, names, typed) {
         .slice(0, 25);
 }
 
+// "20-17" set fra hold 1. null for kampe indberettet uden scoren gemt.
+export function reportedScore(game) {
+    if (!Number.isFinite(game.team1Points) || !Number.isFinite(game.team2Points)) return null;
+    return `${game.team1Points}-${game.team2Points}`;
+}
+
 // Ét forslag: holdet med det tastede tal, eller 0 før man har tastet noget.
 // Discord har ingen overskrift i listen, så holdet står på selve forslaget.
 export function resultScoreChoices(game, team, teamNames, typed) {
     const text = typed.trim();
     let score;
     if (text === "") score = 0;
-    else if (/^-?\d+$/.test(text) && Number.isSafeInteger(Number(text))) score = Number(text);
+    else if (/^\d+$/.test(text) && Number.isSafeInteger(Number(text))) score = Number(text);
     else return [];
 
     const label = game ? teamChoiceName(game, team, teamNames) : `Team ${team}`;

@@ -112,6 +112,11 @@ kun stod med sit navn ville efterlade folk uden en reference. Hold uden navn st�
 som før. Navnet vises i `/play`, `/reroll`, `/play-double`, `/double-accepted`,
 `/matches-overview`, `/result`, `/bet` og i væddemålsafregningen.
 
+`/result` tager scoren som den er spillet, fx `2-1` i games eller `20-17` i point.
+Scoren vises når resultatet bliver indberettet og accepteret, og gemmes på kampen som
+`team1Points` og `team2Points`. Elo og væddemål ser kun på hvem der vandt (eller om
+det blev uafgjort), så en 20-17 tæller det samme som en 2-0.
+
 Mens man skriver `/bet` og `/result`, foreslår botten hvem der står på hvert
 hold (Discord autocomplete): `team:` viser fx `Team 1 — Nordic Chaos (Anna & Bo)`,
 `match:` viser kampene, og pointfelterne viser holdet med det tastede tal, fx
