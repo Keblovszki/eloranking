@@ -17,7 +17,7 @@ import {
     recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement,
     seasonAt, countRandomTeams, formatRandomTeams, resolvedUser,
     computeTeamStats, formatTeamStats, formatPlayerTeamStats, teamStatsScope, seasonGameIdFilter,
-    helpMessage, betTeamChoices, betMatchChoices, resultScoreChoices
+    helpMessage, betTeamChoices, betMatchChoices, resultScoreChoices, gamesWonError
 } from '../src/index.js';
 
 const failures = [];
@@ -541,16 +541,29 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     check('/bet match filtrerer på det tastede', betMatchChoices([double, other], names, '2').map(c => c.value), [2]);
 
     const teamNames = { 1: 'Nordic Chaos', 2: null };
-    check('/result viser det tastede tal med holdet', resultScoreChoices(double, 2, teamNames, '7'),
-        [{ name: 'Team 2 (Carl & Dorte): 7', value: 7 }]);
+    check('/result viser det tastede antal games med holdet', resultScoreChoices(double, 2, teamNames, '1'),
+        [{ name: 'Team 2 (Carl & Dorte): 1', value: 1 }]);
     check('/result viser kun holdet før man har tastet', resultScoreChoices(double, 1, teamNames, ''),
         [{ name: 'Team 1 — Nordic Chaos (Anna & Bo): 0', value: 0 }]);
-    check('/result med holdnavn', resultScoreChoices(double, 1, teamNames, '10')[0].name, 'Team 1 — Nordic Chaos (Anna & Bo): 10');
-    check('/result uden kamp', resultScoreChoices(null, 1, null, '3')[0].name, 'Team 1: 3');
+    check('/result med holdnavn', resultScoreChoices(double, 1, teamNames, '2')[0].name, 'Team 1 — Nordic Chaos (Anna & Bo): 2');
+    check('/result uden kamp', resultScoreChoices(null, 1, null, '2')[0].name, 'Team 1: 2');
     check('/result ignorerer andet end tal', resultScoreChoices(double, 1, teamNames, 'abc'), []);
+    check('/result foreslår ikke flere games end man kan vinde', resultScoreChoices(double, 1, teamNames, '3'), []);
 
     const long = { ...double, playerName1: 'x'.repeat(120) };
     check('forslag holdes under 100 tegn', betTeamChoices([long], new Map(), undefined)[0].name.length, 100);
+}
+
+// --- Games vundet ---
+
+// Bedst af 3: kun 2-0 og 2-1 til det ene af holdene er færdigspillede kampe.
+{
+    for (const [t1, t2] of [[2, 0], [2, 1], [0, 2], [1, 2]]) {
+        check(`${t1}-${t2} er et gyldigt resultat`, gamesWonError(t1, t2), null);
+    }
+    for (const [t1, t2] of [[1, 1], [2, 2], [1, 0], [0, 0], [3, 0], [2, -1]]) {
+        check(`${t1}-${t2} bliver afvist`, typeof gamesWonError(t1, t2), 'string');
+    }
 }
 
 // --- Hjælp ---

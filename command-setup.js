@@ -144,8 +144,8 @@ const ALL_COMMANDS = [
         description: "Report the match result",
         type: 1,
         options: [
-            { name: "team_1_score", description: "Team 1 points", type: 4, required: true, autocomplete: true },
-            { name: "team_2_score", description: "Team 2 points", type: 4, required: true, autocomplete: true }
+            { name: "team_1_score", description: "Games won by team 1 (best of 3)", type: 4, required: true, autocomplete: true, min_value: 0, max_value: 2 },
+            { name: "team_2_score", description: "Games won by team 2 (best of 3)", type: 4, required: true, autocomplete: true, min_value: 0, max_value: 2 }
         ]
     }
 ];

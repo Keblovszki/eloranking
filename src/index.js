@@ -1094,31 +1094,34 @@ async function runCommand(interaction, env, ctx) {
             // --- RESULTS OG ELO BEREGNING ---
 
             case "result":
-                const team1Score = options.find(o => o.name === "team_1_score").value;
-                const team2Score = options.find(o => o.name === "team_2_score").value;
-                let fTeam1 = team1Score > team2Score ? 1 : (team1Score === team2Score ? 0.5 : 0);
-                let fTeam2 = team1Score > team2Score ? 0 : (team1Score === team2Score ? 0.5 : 1);
+                const team1Games = options.find(o => o.name === "team_1_score").value;
+                const team2Games = options.find(o => o.name === "team_2_score").value;
+                const gamesError = gamesWonError(team1Games, team2Games);
+                if (gamesError) return respondEphemeral(gamesError);
+                // team1Score/team2Score er udfaldet (1 eller 0) som Elo og væddemål regner på.
+                const fTeam1 = team1Games > team2Games ? 1 : 0;
+                const fTeam2 = 1 - fTeam1;
 
                 const rGame = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
                     { status: "started", channelId: channel_id, $or: [{ playerId1: id }, { playerId2: id }, { playerId3: id }, { playerId4: id }] },
                     // bettingClosed bliver aldrig sat tilbage af /reject. Ellers kunne man
                     // indberette et resultat, se det, afvise det og så vædde bagefter.
-                    { $set: { team1Score: fTeam1, team2Score: fTeam2, status: "result", bettingClosed: true } },
+                    { $set: { team1Score: fTeam1, team2Score: fTeam2, team1Games, team2Games, status: "result", bettingClosed: true } },
                     { returnDocument: 'after' }
                 );
                 if (!rGame) return respond("You have not participated in any started game.");
 
                 if (rGame.type === "single") {
-                    return respond(`Result reported by ${global_name}: \n\n${rGame.playerName1}: ${fTeam1}\n${rGame.playerName2}: ${fTeam2}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
+                    return respond(`Result reported by ${global_name}: \n\n${rGame.playerName1}: ${team1Games}\n${rGame.playerName2}: ${team2Games}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
                 } else {
                     const rNames = await getGameTeamNames(db, channel_id, rGame);
-                    return respond(`Result reported by ${global_name}: \n\n${teamHeading(1, rNames[1])}: ${rGame.playerName1}, ${rGame.playerName2}: ${fTeam1}\n${teamHeading(2, rNames[2])}: ${rGame.playerName3}, ${rGame.playerName4}: ${fTeam2}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
+                    return respond(`Result reported by ${global_name}: \n\n${teamHeading(1, rNames[1])}: ${rGame.playerName1}, ${rGame.playerName2}: ${team1Games}\n${teamHeading(2, rNames[2])}: ${rGame.playerName3}, ${rGame.playerName4}: ${team2Games}\n\nTo accept the result type: **/accept**\nTo reject the result type: **/reject**`);
                 }
 
             case "reject":
                 const rejGame = await db.collection(GAMES_COLLECTION).findOneAndUpdate(
                     { status: "result", channelId: channel_id, $or: [{ playerId1: id }, { playerId2: id }, { playerId3: id }, { playerId4: id }] },
-                    { $set: { status: "started", team1Score: null, team2Score: null } }
+                    { $set: { status: "started", team1Score: null, team2Score: null, team1Games: null, team2Games: null } }
                 );
                 if (!rejGame) return respond(await explainMissingResult(db, channel_id, "reject"));
                 return respond(`${global_name} has *rejected* the result. Type in a new result to be accepted.`);
@@ -1273,7 +1276,7 @@ export function helpMessage(env) {
         `Start: **/play**. The game starts when 4 players join.\n` +
         `Don't like the teams? Type: **/reroll** (max ${MAX_REROLLS} times per game).\n\n` +
         "**GAMES**\n" +
-        `Report result: **/result**. Accept result: **/accept**.\n\n` +
+        `Report games won: **/result** (2-0 or 2-1). Accept: **/accept**.\n\n` +
         "**BETTING**\n" +
         `Not playing? Bet on a team with **/bet**. You win or lose ${BET_SHARE * 100}% of what that team gets (at least ${BET_MINIMUM}).\n` +
         `Betting closes as soon as the result is reported.\n\n` +
@@ -1616,13 +1619,25 @@ export function betMatchChoices(games, names, typed) {
         .slice(0, 25);
 }
 
-// Ét forslag: holdet med det tastede tal, eller 0 før man har tastet noget.
+// Kampene spilles bedst af 3, og /result tager antal vundne games.
+export const GAMES_TO_WIN = 2;
+
+// Et færdigspillet bedst af 3 ender 2-0 eller 2-1 til det ene hold. Giver
+// fejlbeskeden til brugeren, eller null når stillingen er gyldig.
+export function gamesWonError(team1Games, team2Games) {
+    const winner = Math.max(team1Games, team2Games);
+    const loser = Math.min(team1Games, team2Games);
+    if (winner === GAMES_TO_WIN && loser >= 0 && loser < GAMES_TO_WIN) return null;
+    return `Matches are best of 3, so the result must be 2-0 or 2-1 in games won (you entered ${team1Games}-${team2Games}).`;
+}
+
+// Ét forslag: holdet med det tastede antal games, eller 0 før man har tastet noget.
 // Discord har ingen overskrift i listen, så holdet står på selve forslaget.
 export function resultScoreChoices(game, team, teamNames, typed) {
     const text = typed.trim();
     let score;
     if (text === "") score = 0;
-    else if (/^-?\d+$/.test(text) && Number.isSafeInteger(Number(text))) score = Number(text);
+    else if (/^\d+$/.test(text) && Number(text) <= GAMES_TO_WIN) score = Number(text);
     else return [];
 
     const label = game ? teamChoiceName(game, team, teamNames) : `Team ${team}`;

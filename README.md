@@ -112,10 +112,14 @@ kun stod med sit navn ville efterlade folk uden en reference. Hold uden navn st�
 som før. Navnet vises i `/play`, `/reroll`, `/play-double`, `/double-accepted`,
 `/matches-overview`, `/result`, `/bet` og i væddemålsafregningen.
 
+Kampene spilles bedst af 3, så `/result` tager antal vundne games pr. hold, og kun
+2-0 og 2-1 (til det ene af holdene) bliver godtaget. Vinderen afgør Elo og væddemål;
+antallet af games gemmes på kampen som `team1Games` og `team2Games`.
+
 Mens man skriver `/bet` og `/result`, foreslår botten hvem der står på hvert
 hold (Discord autocomplete): `team:` viser fx `Team 1 — Nordic Chaos (Anna & Bo)`,
-`match:` viser kampene, og pointfelterne viser holdet med det tastede tal, fx
-`Team 1 — Nordic Chaos (Anna & Bo): 7`.
+`match:` viser kampene, og felterne i `/result` viser holdet med det tastede antal
+games, fx `Team 1 — Nordic Chaos (Anna & Bo): 2`.
 Forslagene skal nå frem inden for 3 sekunder; gør de ikke det, kan man stadig
 taste tallet selv.
 
