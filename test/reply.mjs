@@ -17,7 +17,8 @@ import {
     recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement,
     seasonAt, countRandomTeams, formatRandomTeams, resolvedUser,
     computeTeamStats, formatTeamStats, formatPlayerTeamStats, teamStatsScope, seasonGameIdFilter,
-    helpMessage, betTeamChoices, betMatchChoices, resultScoreChoices, gamesWonError
+    helpMessage, betTeamChoices, betMatchChoices, resultScoreChoices, gamesWonError,
+    resultModal, resultOptionsFromModal
 } from '../src/index.js';
 
 const failures = [];
@@ -564,6 +565,31 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     for (const [t1, t2] of [[1, 1], [2, 2], [1, 0], [0, 0], [3, 0], [2, -1]]) {
         check(`${t1}-${t2} bliver afvist`, typeof gamesWonError(t1, t2), 'string');
     }
+}
+
+// --- /result-modal ---
+
+// Formularen har de samme felter som /result, så indsendelsen kan køre som /result.
+{
+    const double = { type: 'double', playerId1: 'a', playerId2: 'b', playerId3: 'c', playerId4: 'd',
+        playerName1: 'Anna', playerName2: 'Bo', playerName3: 'Carl', playerName4: 'Dorte' };
+    const modal = resultModal(double, { 1: 'Nordic Chaos', 2: null });
+    const inputs = modal.components.map(row => row.components[0]);
+    check('formularen har et felt pr. hold med /result-navnene', inputs.map(i => i.custom_id), ['team_1_score', 'team_2_score']);
+    check('formularen viser holdene i pladsholderen', inputs.map(i => i.placeholder), ['Nordic Chaos (Anna & Bo)', 'Carl & Dorte']);
+    check('labels holder sig under 45 tegn', inputs.every(i => i.label.length <= 45), true);
+    check('titlen holder sig under 45 tegn', modal.title.length <= 45, true);
+    check('formularen uden kamp har ingen pladsholder', resultModal(null, null).components.map(r => 'placeholder' in r.components[0]), [false, false]);
+    const long = { ...double, playerName1: 'x'.repeat(120) };
+    check('pladsholderen holdes under 100 tegn', resultModal(long, null).components[0].components[0].placeholder.length, 100);
+
+    const submitted = { custom_id: 'result_modal', components: [
+        { type: 1, components: [{ type: 4, custom_id: 'team_1_score', value: ' 2 ' }] },
+        { type: 1, components: [{ type: 4, custom_id: 'team_2_score', value: 'x' }] }
+    ] };
+    check('indsendte tal bliver til tal, resten står som tastet', resultOptionsFromModal(submitted),
+        [{ name: 'team_1_score', value: 2 }, { name: 'team_2_score', value: 'x' }]);
+    check('et tastet bogstav bliver afvist', typeof gamesWonError(2, 'x'), 'string');
 }
 
 // --- Hjælp ---

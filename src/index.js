@@ -183,6 +183,11 @@ export default {
                 });
             }
 
+            // Formularen er selve svaret, så den kan ikke kvitteres først.
+            if (name === "result-modal") {
+                return Response.json(await resultModalResponse(interaction, env));
+            }
+
             // Discord kasserer svaret hvis der ikke er kommet et inden for 3
             // sekunder. Derfor kvitterer vi med det samme og redigerer beskeden
             // bagefter — så har vi 15 minutter i stedet, og arbejdet ligger i
@@ -196,6 +201,15 @@ export default {
                 type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
                 data: EPHEMERAL_COMMANDS.has(name) ? { flags: 64 } : {}
             });
+        }
+        // Udfyldt /result-modal. Den kører som /result med de samme to felter, så
+        // validering, svar og /accept er fælles.
+        if (interaction.type === InteractionType.MODAL_SUBMIT && interaction.data.custom_id === RESULT_MODAL_ID) {
+            const asResult = { ...interaction, data: { name: "result", options: resultOptionsFromModal(interaction.data) } };
+            ctx.waitUntil(replyToCommand(asResult, env, ctx).catch(
+                err => console.error("Kunne ikke levere svaret til Discord:", err)
+            ));
+            return Response.json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: {} });
         }
         console.error(`Ukendt interaction-type: ${interaction.type}`);
         return new Response("Unknown interaction", { status: 400 });
@@ -1276,7 +1290,7 @@ export function helpMessage(env) {
         `Start: **/play**. The game starts when 4 players join.\n` +
         `Don't like the teams? Type: **/reroll** (max ${MAX_REROLLS} times per game).\n\n` +
         "**GAMES**\n" +
-        `Report games won: **/result** (2-0 or 2-1). Accept: **/accept**.\n\n` +
+        `Report games won (2-0/2-1): **/result** or **/result-modal**. Accept: **/accept**.\n\n` +
         "**BETTING**\n" +
         `Not playing? Bet on a team with **/bet**. You win or lose ${BET_SHARE * 100}% of what that team gets (at least ${BET_MINIMUM}).\n` +
         `Betting closes as soon as the result is reported.\n\n` +
@@ -1642,6 +1656,90 @@ export function resultScoreChoices(game, team, teamNames, typed) {
 
     const label = game ? teamChoiceName(game, team, teamNames) : `Team ${team}`;
     return [choice(`${label}: ${score}`, score)];
+}
+
+// --- /result-modal ---
+
+const RESULT_MODAL_ID = "result_modal";
+const TEXT_INPUT_PLACEHOLDER_MAX = 100;
+
+// Kampen slås op for at vise holdene i formularen. Discord vil have formularen
+// inden for 3 sekunder, så opslaget får samme frist som autocomplete; nås den
+// ikke, vises formularen uden navne. Er man ikke med i nogen kamp, får man
+// besked med det samme i stedet for at udfylde en formular der bliver afvist.
+async function resultModalResponse(interaction, env) {
+    let timer;
+    const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(undefined), AUTOCOMPLETE_BUDGET_MS); });
+    const found = await Promise.race([
+        findResultModalGame(interaction, env).catch(err => {
+            console.error("Opslaget til /result-modal fejlede:", err);
+            return undefined;
+        }),
+        timeout
+    ]);
+    clearTimeout(timer);
+
+    if (found === null) {
+        return {
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: { content: "You have not participated in any started game.", flags: 64 }
+        };
+    }
+    return {
+        type: InteractionResponseType.MODAL,
+        data: resultModal(found?.game ?? null, found?.names ?? null)
+    };
+}
+
+// null når brugeren ikke er med i en startet kamp i kanalen.
+async function findResultModalGame(interaction, env) {
+    const channelId = interaction.channel_id;
+    const userId = interaction.member?.user?.id;
+    const client = new MongoClient(env.MONGODB_URI, {
+        serverSelectionTimeoutMS: AUTOCOMPLETE_BUDGET_MS, connectTimeoutMS: AUTOCOMPLETE_BUDGET_MS
+    });
+    try {
+        await client.connect();
+        const db = client.db(DB_ELO_NAME);
+        const game = await db.collection(GAMES_COLLECTION).findOne({
+            status: "started", channelId,
+            $or: [{ playerId1: userId }, { playerId2: userId }, { playerId3: userId }, { playerId4: userId }]
+        });
+        if (!game) return null;
+        return { game, names: await getGameTeamNames(db, channelId, game) };
+    } finally {
+        await client.close();
+    }
+}
+
+// Ét tekstfelt pr. hold med samme custom_id som felterne i /result. Labels må
+// højst være 45 tegn, så holdnavn og spillere står i pladsholderen.
+export function resultModal(game, teamNames) {
+    const field = team => {
+        const players = game ? getTeamLabel(game, team, teamNames) : null;
+        const placeholder = players && players.length > TEXT_INPUT_PLACEHOLDER_MAX
+            ? players.slice(0, TEXT_INPUT_PLACEHOLDER_MAX - 1) + "…"
+            : players;
+        return {
+            type: 1,
+            components: [{
+                type: 4, custom_id: `team_${team}_score`, style: 1,
+                label: `Team ${team} games won (0-${GAMES_TO_WIN})`,
+                min_length: 1, max_length: 1, required: true,
+                ...(placeholder ? { placeholder } : {})
+            }]
+        };
+    };
+    return { custom_id: RESULT_MODAL_ID, title: "Report result (best of 3)", components: [field(1), field(2)] };
+}
+
+// Tekstfelter giver strenge. Tal laves om til tal; alt andet sendes uændret
+// videre, så gamesWonError kan vise hvad der blev tastet.
+export function resultOptionsFromModal(data) {
+    return data.components.flatMap(row => row.components).map(input => {
+        const text = String(input.value ?? "").trim();
+        return { name: input.custom_id, value: /^\d+$/.test(text) ? Number(text) : text };
+    });
 }
 
 // --- Væddemål ---

@@ -147,7 +147,8 @@ const ALL_COMMANDS = [
             { name: "team_1_score", description: "Games won by team 1 (best of 3)", type: 4, required: true, autocomplete: true, min_value: 0, max_value: 2 },
             { name: "team_2_score", description: "Games won by team 2 (best of 3)", type: 4, required: true, autocomplete: true, min_value: 0, max_value: 2 }
         ]
-    }
+    },
+    { name: "result-modal", description: "Report the match result in a form (games won)", type: 1 }
 ];
 
 async function installCommands() {

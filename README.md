@@ -116,6 +116,10 @@ Kampene spilles bedst af 3, så `/result` tager antal vundne games pr. hold, og 
 2-0 og 2-1 (til det ene af holdene) bliver godtaget. Vinderen afgør Elo og væddemål;
 antallet af games gemmes på kampen som `team1Games` og `team2Games`.
 
+`/result-modal` gør det samme via en formular med ét felt pr. hold. Holdnavn og
+spillere står i felterne, så man kan se hvilket hold der er 1 og 2. Er man ikke med
+i en startet kamp, kommer formularen slet ikke frem.
+
 Mens man skriver `/bet` og `/result`, foreslår botten hvem der står på hvert
 hold (Discord autocomplete): `team:` viser fx `Team 1 — Nordic Chaos (Anna & Bo)`,
 `match:` viser kampene, og felterne i `/result` viser holdet med det tastede antal
