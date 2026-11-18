@@ -98,6 +98,17 @@ export default {
             return new Response("Unknown component", { status: 400 });
         }
 
+        // Forslag mens man skriver i /bet og /result. Her kan vi ikke kvittere
+        // først og svare bagefter — Discord vil have forslagene inden for 3
+        // sekunder. Kommer de ikke, kan man stadig bare taste tallet selv.
+        if (interaction.type === InteractionType.APPLICATION_COMMAND_AUTOCOMPLETE) {
+            const choices = await autocompleteWithin(interaction, env, AUTOCOMPLETE_BUDGET_MS);
+            return Response.json({
+                type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
+                data: { choices }
+            });
+        }
+
         if (interaction.type === InteractionType.APPLICATION_COMMAND) {
             const { name, options } = interaction.data;
             const global_name = memberDisplayName(interaction.member);
@@ -792,6 +803,9 @@ async function runCommand(interaction, env, ctx) {
 
                 const btTeam = options.find(o => o.name === "team").value;
                 const btMatchOption = options.find(o => o.name === "match");
+                // Med autocomplete er der ingen faste valg, så Discord tager imod
+                // ethvert heltal man selv taster.
+                if (btTeam !== 1 && btTeam !== 2) return respondEphemeral("Pick team 1 or team 2.");
 
                 // Der kan sagtens være flere kampe i gang i kanalen, så vi lader
                 // brugeren pege på én hvis der er tvivl.
@@ -1080,8 +1094,8 @@ async function runCommand(interaction, env, ctx) {
             // --- RESULTS OG ELO BEREGNING ---
 
             case "result":
-                const team1Score = options[0].value;
-                const team2Score = options[1].value;
+                const team1Score = options.find(o => o.name === "team_1_score").value;
+                const team2Score = options.find(o => o.name === "team_2_score").value;
                 let fTeam1 = team1Score > team2Score ? 1 : (team1Score === team2Score ? 0.5 : 0);
                 let fTeam2 = team1Score > team2Score ? 0 : (team1Score === team2Score ? 0.5 : 1);
 
@@ -1493,6 +1507,126 @@ async function explainMissingResult(db, channelId, verb) {
             "Report one with **/result** — and if you just did, it has already been settled.";
     }
     return `You have to be part of the game to *${verb}* it!`;
+}
+
+// --- Autocomplete ---
+
+// Lidt under Discords 3 sekunder, så der er tid til at svare med en tom liste.
+const AUTOCOMPLETE_BUDGET_MS = 2500;
+// Discord afviser hele svaret hvis ét forslag er længere end 100 tegn.
+const CHOICE_NAME_MAX = 100;
+
+async function autocompleteWithin(interaction, env, budgetMs) {
+    let timer;
+    const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(null), budgetMs); });
+    const choices = await Promise.race([
+        autocomplete(interaction, env).catch(err => {
+            console.error(`Autocomplete fejlede (${interaction.data.name}):`, err);
+            return [];
+        }),
+        timeout
+    ]);
+    clearTimeout(timer);
+    if (choices === null) console.error(`Autocomplete nåede ikke frem inden ${budgetMs} ms (${interaction.data.name})`);
+    return choices ?? [];
+}
+
+async function autocomplete(interaction, env) {
+    const { name, options = [] } = interaction.data;
+    const focused = options.find(o => o.focused);
+    if (!focused) return [];
+    const channelId = interaction.channel_id;
+    const userId = interaction.member?.user?.id;
+
+    const client = new MongoClient(env.MONGODB_URI, {
+        serverSelectionTimeoutMS: AUTOCOMPLETE_BUDGET_MS, connectTimeoutMS: AUTOCOMPLETE_BUDGET_MS
+    });
+    try {
+        await client.connect();
+        const db = client.db(DB_ELO_NAME);
+
+        if (name === "bet") {
+            // Samme udvalg og rækkefølge som /bet selv, ellers peger match:2 på en
+            // anden kamp i forslaget end i kommandoen.
+            const games = await db.collection(GAMES_COLLECTION).find(
+                { status: "started", channelId }
+            ).sort({ _id: 1 }).toArray();
+            const names = await fetchTeamNames(db, channelId,
+                games.flatMap(g => [gamePairKey(g, 1), gamePairKey(g, 2)]));
+            if (focused.name === "match") return betMatchChoices(games, names, String(focused.value ?? ""));
+            if (focused.name === "team") {
+                // Under autocomplete kommer de andre felter som det man har tastet,
+                // evt. en tom streng.
+                const match = String(options.find(o => o.name === "match")?.value ?? "").trim();
+                return betTeamChoices(games, names, /^\d+$/.test(match) ? Number(match) : undefined);
+            }
+            return [];
+        }
+
+        if (name === "result") {
+            const team = focused.name === "team_1_score" ? 1 : focused.name === "team_2_score" ? 2 : null;
+            if (!team) return [];
+            const game = await db.collection(GAMES_COLLECTION).findOne({
+                status: "started", channelId,
+                $or: [{ playerId1: userId }, { playerId2: userId }, { playerId3: userId }, { playerId4: userId }]
+            });
+            const names = game ? await getGameTeamNames(db, channelId, game) : null;
+            return resultScoreChoices(game, team, names, String(focused.value ?? ""));
+        }
+        return [];
+    } finally {
+        await client.close();
+    }
+}
+
+function choice(name, value) {
+    const short = name.length > CHOICE_NAME_MAX ? name.slice(0, CHOICE_NAME_MAX - 1) + "…" : name;
+    return { name: short, value };
+}
+
+// "Team 1 — Nordic Chaos: Anna & Bo" — nummeret først, for det er det der
+// bliver stående i kommandoen.
+function teamChoiceName(game, team, teamNames) {
+    return `${teamHeading(team, teamNames?.[team])}: ${getTeamLabel(game, team)}`;
+}
+
+// names er en Map fra makkerpar til holdnavn, som fetchTeamNames giver den.
+export function betTeamChoices(games, names, matchNumber) {
+    let game = null;
+    if (matchNumber !== undefined) game = games[matchNumber - 1] ?? null;
+    else if (games.length === 1) game = games[0];
+
+    if (!game) {
+        const hint = games.length === 0 ? "no match is running"
+            : matchNumber !== undefined ? `there is no match ${matchNumber}`
+            : "fill in match to see the players";
+        return [1, 2].map(t => choice(`Team ${t} (${hint})`, t));
+    }
+    const teamNames = teamNamesFrom(names, game);
+    return [1, 2].map(t => choice(teamChoiceName(game, t, teamNames), t));
+}
+
+export function betMatchChoices(games, names, typed) {
+    return games
+        .map((g, i) => {
+            const n = teamNamesFrom(names, g);
+            return choice(`${i + 1}: ${getTeamLabel(g, 1, n)} vs ${getTeamLabel(g, 2, n)}`, i + 1);
+        })
+        .filter(c => String(c.value).startsWith(typed.trim()))
+        .slice(0, 25);
+}
+
+// Tallet man taster, med holdet ved siden af. Før man har tastet noget, vises
+// 0–10, så man kan se hvilket hold feltet hører til.
+export function resultScoreChoices(game, team, teamNames, typed) {
+    const text = typed.trim();
+    let scores;
+    if (text === "") scores = Array.from({ length: 11 }, (_, i) => i);
+    else if (/^-?\d+$/.test(text) && Number.isSafeInteger(Number(text))) scores = [Number(text)];
+    else return [];
+
+    const label = game ? teamChoiceName(game, team, teamNames) : `Team ${team}`;
+    return scores.map(n => choice(`${n} — ${label}`, n));
 }
 
 // --- Væddemål ---

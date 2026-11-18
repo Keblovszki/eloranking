@@ -106,9 +106,9 @@ const ALL_COMMANDS = [
         options: [
             {
                 name: "team", description: "Which team do you think wins?", type: 4, required: true,
-                choices: [{ name: "Team 1", value: 1 }, { name: "Team 2", value: 2 }]
+                min_value: 1, max_value: 2, autocomplete: true
             },
-            { name: "match", description: "Match number — only needed if several matches are running", type: 4, required: false }
+            { name: "match", description: "Match number — only needed if several matches are running", type: 4, required: false, min_value: 1, autocomplete: true }
         ]
     },
     {
@@ -144,8 +144,8 @@ const ALL_COMMANDS = [
         description: "Report the match result",
         type: 1,
         options: [
-            { name: "team_1_score", description: "Team 1 points", type: 4, required: true },
-            { name: "team_2_score", description: "Team 2 points", type: 4, required: true }
+            { name: "team_1_score", description: "Team 1 points", type: 4, required: true, autocomplete: true },
+            { name: "team_2_score", description: "Team 2 points", type: 4, required: true, autocomplete: true }
         ]
     }
 ];

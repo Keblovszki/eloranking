@@ -112,6 +112,12 @@ kun stod med sit navn ville efterlade folk uden en reference. Hold uden navn st�
 som før. Navnet vises i `/play`, `/reroll`, `/play-double`, `/double-accepted`,
 `/matches-overview`, `/result`, `/bet` og i væddemålsafregningen.
 
+Mens man skriver `/bet` og `/result`, foreslår botten hvem der står på hvert
+hold (Discord autocomplete): `team:` viser fx `Team 1 — Nordic Chaos: Anna & Bo`,
+`match:` viser kampene, og pointfelterne viser tallet med holdet ved siden af.
+Forslagene skal nå frem inden for 3 sekunder; gør de ikke det, kan man stadig
+taste tallet selv.
+
 To hold i samme kanal kan ikke hedde det samme — store og små bogstaver tæller
 ikke med. Reglen håndhæves af et unikt indeks på (kanal, navn), ikke af en
 læsning inden skrivningen, så to der omdøber samtidig ikke kan slippe forbi
