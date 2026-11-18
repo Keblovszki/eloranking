@@ -524,15 +524,15 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     const names = new Map([[teamPairKey('a', 'b'), 'Nordic Chaos']]);
 
     check('/bet team viser holdnavn og spillere for den eneste kamp', betTeamChoices([double], names, undefined), [
-        { name: 'Team 1 — Nordic Chaos: Anna & Bo', value: 1 },
-        { name: 'Team 2: Carl & Dorte', value: 2 }
+        { name: 'Team 1 — Nordic Chaos (Anna & Bo)', value: 1 },
+        { name: 'Team 2 (Carl & Dorte)', value: 2 }
     ]);
     check('/bet team følger match-feltet', betTeamChoices([double, other], names, 2).map(c => c.name),
-        ['Team 1: Eva & Finn', 'Team 2: Gry & Hans']);
+        ['Team 1 (Eva & Finn)', 'Team 2 (Gry & Hans)']);
     check('/bet team beder om match når flere kampe kører', betTeamChoices([double, other], names, undefined).map(c => c.value), [1, 2]);
     check('/bet team uden kampe', betTeamChoices([], names, undefined)[0].name, 'Team 1 (no match is running)');
     check('/bet team med et match der ikke findes', betTeamChoices([double], names, 3)[0].name, 'Team 1 (there is no match 3)');
-    check('/bet team i en single', betTeamChoices([single], names, undefined).map(c => c.name), ['Team 1: Anna', 'Team 2: Carl']);
+    check('/bet team i en single', betTeamChoices([single], names, undefined).map(c => c.name), ['Team 1 (Anna)', 'Team 2 (Carl)']);
 
     check('/bet match lister kampene', betMatchChoices([double, other], names, ''), [
         { name: '1: Nordic Chaos (Anna & Bo) vs Carl & Dorte', value: 1 },
@@ -542,11 +542,11 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
 
     const teamNames = { 1: 'Nordic Chaos', 2: null };
     check('/result viser det tastede tal med holdet', resultScoreChoices(double, 2, teamNames, '7'),
-        [{ name: '7 — Team 2: Carl & Dorte', value: 7 }]);
-    check('/result foreslår 0-10 før man har tastet', resultScoreChoices(double, 1, teamNames, '').map(c => c.value),
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    check('/result med holdnavn', resultScoreChoices(double, 1, teamNames, '10')[0].name, '10 — Team 1 — Nordic Chaos: Anna & Bo');
-    check('/result uden kamp', resultScoreChoices(null, 1, null, '3')[0].name, '3 — Team 1');
+        [{ name: 'Team 2 (Carl & Dorte): 7', value: 7 }]);
+    check('/result viser kun holdet før man har tastet', resultScoreChoices(double, 1, teamNames, ''),
+        [{ name: 'Team 1 — Nordic Chaos (Anna & Bo): 0', value: 0 }]);
+    check('/result med holdnavn', resultScoreChoices(double, 1, teamNames, '10')[0].name, 'Team 1 — Nordic Chaos (Anna & Bo): 10');
+    check('/result uden kamp', resultScoreChoices(null, 1, null, '3')[0].name, 'Team 1: 3');
     check('/result ignorerer andet end tal', resultScoreChoices(double, 1, teamNames, 'abc'), []);
 
     const long = { ...double, playerName1: 'x'.repeat(120) };
