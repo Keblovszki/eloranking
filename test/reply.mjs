@@ -17,7 +17,7 @@ import {
     recordsForDay, formatRngdleDayResult, fitRngdleAnnouncement,
     seasonAt, countRandomTeams, formatRandomTeams, resolvedUser,
     computeTeamStats, formatTeamStats, formatPlayerTeamStats, teamStatsScope, seasonGameIdFilter,
-    helpMessage, betTeamChoices, betMatchChoices, resultScoreChoices
+    helpMessage, betTeamChoices, betMatchChoices, resultScoreChoices, reportedScore
 } from '../src/index.js';
 
 const failures = [];
@@ -548,6 +548,12 @@ check('ingen tidligere rul giver ingen rekorder', recordsForDay([dayRoll('anna',
     check('/result med holdnavn', resultScoreChoices(double, 1, teamNames, '10')[0].name, 'Team 1 — Nordic Chaos (Anna & Bo): 10');
     check('/result uden kamp', resultScoreChoices(null, 1, null, '3')[0].name, 'Team 1: 3');
     check('/result ignorerer andet end tal', resultScoreChoices(double, 1, teamNames, 'abc'), []);
+
+    check('/result foreslår ikke negative tal', resultScoreChoices(double, 1, teamNames, '-3'), []);
+
+    check('scoren vises som den blev tastet', reportedScore({ team1Points: 20, team2Points: 17 }), '20-17');
+    check('uafgjort vises også', reportedScore({ team1Points: 1, team2Points: 1 }), '1-1');
+    check('kampe uden gemt score viser ingen score', reportedScore({ team1Score: 1, team2Score: 0 }), null);
 
     const long = { ...double, playerName1: 'x'.repeat(120) };
     check('forslag holdes under 100 tegn', betTeamChoices([long], new Map(), undefined)[0].name.length, 100);
