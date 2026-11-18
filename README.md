@@ -113,8 +113,9 @@ som før. Navnet vises i `/play`, `/reroll`, `/play-double`, `/double-accepted`,
 `/matches-overview`, `/result`, `/bet` og i væddemålsafregningen.
 
 Mens man skriver `/bet` og `/result`, foreslår botten hvem der står på hvert
-hold (Discord autocomplete): `team:` viser fx `Team 1 — Nordic Chaos: Anna & Bo`,
-`match:` viser kampene, og pointfelterne viser tallet med holdet ved siden af.
+hold (Discord autocomplete): `team:` viser fx `Team 1 — Nordic Chaos (Anna & Bo)`,
+`match:` viser kampene, og pointfelterne viser holdet med det tastede tal, fx
+`Team 1 — Nordic Chaos (Anna & Bo): 7`.
 Forslagene skal nå frem inden for 3 sekunder; gør de ikke det, kan man stadig
 taste tallet selv.
 

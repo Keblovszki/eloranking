@@ -1584,10 +1584,10 @@ function choice(name, value) {
     return { name: short, value };
 }
 
-// "Team 1 — Nordic Chaos: Anna & Bo" — nummeret først, for det er det der
+// "Team 1 — Nordic Chaos (Anna & Bo)" — nummeret først, for det er det der
 // bliver stående i kommandoen.
 function teamChoiceName(game, team, teamNames) {
-    return `${teamHeading(team, teamNames?.[team])}: ${getTeamLabel(game, team)}`;
+    return `${teamHeading(team, teamNames?.[team])} (${getTeamLabel(game, team)})`;
 }
 
 // names er en Map fra makkerpar til holdnavn, som fetchTeamNames giver den.
@@ -1616,17 +1616,17 @@ export function betMatchChoices(games, names, typed) {
         .slice(0, 25);
 }
 
-// Tallet man taster, med holdet ved siden af. Før man har tastet noget, vises
-// 0–10, så man kan se hvilket hold feltet hører til.
+// Ét forslag: holdet med det tastede tal, eller 0 før man har tastet noget.
+// Discord har ingen overskrift i listen, så holdet står på selve forslaget.
 export function resultScoreChoices(game, team, teamNames, typed) {
     const text = typed.trim();
-    let scores;
-    if (text === "") scores = Array.from({ length: 11 }, (_, i) => i);
-    else if (/^-?\d+$/.test(text) && Number.isSafeInteger(Number(text))) scores = [Number(text)];
+    let score;
+    if (text === "") score = 0;
+    else if (/^-?\d+$/.test(text) && Number.isSafeInteger(Number(text))) score = Number(text);
     else return [];
 
     const label = game ? teamChoiceName(game, team, teamNames) : `Team ${team}`;
-    return scores.map(n => choice(`${n} — ${label}`, n));
+    return [choice(`${label}: ${score}`, score)];
 }
 
 // --- Væddemål ---
